@@ -13,8 +13,6 @@ Usage:
     python manage.py ingest doc1.txt
     python manage.py ingest doc1.txt doc2.txt --chunk-size 800
 """
-import re
-import uuid
 from pathlib import Path
 import logging
 

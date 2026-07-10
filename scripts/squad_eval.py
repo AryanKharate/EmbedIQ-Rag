@@ -25,9 +25,7 @@ import os
 import random
 import re
 import string
-import sys
 import time
-import uuid
 from collections import Counter
 
 # ── Django setup — must happen before importing any app modules ──
@@ -53,7 +51,7 @@ from qdrant_client.models import (
 
 # Import our existing RAG services (now pointed at squad_eval collection)
 from apps.generation.services import ask
-from apps.retrieval.ingest_service import ingest_document, ensure_collection
+from apps.retrieval.ingest_service import ingest_document
 from apps.retrieval.services import search_chunks
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -80,7 +78,7 @@ def load_squad_sample(n_samples: int) -> list[dict]:
     Load a balanced, reproducibly-random sample from SQuAD 2.0 validation split.
     n_samples // 2 answerable + n_samples // 2 unanswerable.
     """
-    print(f"Loading SQuAD 2.0 validation set from Hugging Face...")
+    print("Loading SQuAD 2.0 validation set from Hugging Face...")
     dataset = load_dataset("rajpurkar/squad_v2", split="validation")
 
     answerable = [ex for ex in dataset if len(ex["answers"]["text"]) > 0]
@@ -419,7 +417,7 @@ def run_evaluation(n_samples: int, keep_collection: bool) -> None:
     with open("squad_eval_results.json", "w") as f:
         json.dump(output, f, indent=2)
 
-    print(f"\n  Detailed results saved → squad_eval_results.json")
+    print("\n  Detailed results saved → squad_eval_results.json")
 
     # ── Cleanup ──────────────────────────────────────────────────
     if not keep_collection:

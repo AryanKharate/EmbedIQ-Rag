@@ -5,7 +5,6 @@ logger = logging.getLogger(__name__)
 from ninja import Router, Schema, File
 from ninja.files import UploadedFile
 from django.shortcuts import get_object_or_404
-from pydantic import Field
 
 from .models import Document
 from .ingest_service import ingest_document
