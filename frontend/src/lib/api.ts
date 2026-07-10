@@ -12,7 +12,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "Unknown error");
-    throw new Error(`API ${init?.method ?? "GET"} ${path} failed (${res.status}): ${text}`);
+    throw new Error(
+      `API ${init?.method ?? "GET"} ${path} failed (${res.status}): ${text}`,
+    );
   }
   // 204 No Content — return empty object
   if (res.status === 204) return {} as T;
@@ -41,7 +43,10 @@ export const documentsApi = {
   upload: (file: File): Promise<ApiDocument> => {
     const form = new FormData();
     form.append("file", file);
-    return fetch(`${BASE}/documents/upload`, { method: "POST", body: form }).then((r) => {
+    return fetch(`${BASE}/documents/upload`, {
+      method: "POST",
+      body: form,
+    }).then((r) => {
       if (!r.ok) throw new Error(`Upload failed (${r.status})`);
       return r.json();
     });
@@ -60,7 +65,10 @@ export const documentsApi = {
 /* ───────── Chat / Query ───────── */
 
 export const chatApi = {
-  query: (question: string, session_id?: string | null): Promise<QueryResponse> =>
+  query: (
+    question: string,
+    session_id?: string | null,
+  ): Promise<QueryResponse> =>
     request("/query", {
       method: "POST",
       body: JSON.stringify({ question, session_id: session_id ?? null }),

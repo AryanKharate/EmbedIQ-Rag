@@ -3,11 +3,7 @@ import { MessageSquarePlus } from "lucide-react";
 import { useEffect } from "react";
 
 import { Button } from "@/components/ui/button";
-import {
-  createThread,
-  loadThreads,
-  saveThreads,
-} from "@/lib/chat-store";
+import { createThread, loadThreads, saveThreads } from "@/lib/chat-store";
 import { useHydrated } from "@/hooks/use-hydrated";
 
 export const Route = createFileRoute("/")({

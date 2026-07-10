@@ -1,5 +1,11 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { FileText, MessageSquarePlus, Trash2, Upload, Loader2 } from "lucide-react";
+import {
+  FileText,
+  MessageSquarePlus,
+  Trash2,
+  Upload,
+  Loader2,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {

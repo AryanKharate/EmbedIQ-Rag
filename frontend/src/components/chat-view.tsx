@@ -88,8 +88,7 @@ export function ChatView({ threadId }: Props) {
 
       const withUser: RagThread = {
         ...thread,
-        title:
-          thread.messages.length === 0 ? deriveTitle(text) : thread.title,
+        title: thread.messages.length === 0 ? deriveTitle(text) : thread.title,
         messages: [...thread.messages, userMsg],
         updatedAt: Date.now(),
       };
@@ -111,7 +110,7 @@ export function ChatView({ threadId }: Props) {
 
         const finalThread: RagThread = {
           ...withUser,
-          sessionId: result.session_id,   // persist session for follow-ups
+          sessionId: result.session_id, // persist session for follow-ups
           messages: [...withUser.messages, assistantMsg],
           updatedAt: Date.now(),
         };
@@ -225,12 +224,7 @@ export function ChatView({ threadId }: Props) {
 function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === "user";
   return (
-    <li
-      className={cn(
-        "flex gap-3",
-        isUser ? "justify-end" : "justify-start",
-      )}
-    >
+    <li className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}>
       {!isUser && (
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
           <Sparkles className="h-4 w-4" />
