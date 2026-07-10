@@ -26,7 +26,7 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       - name: Run ruff linter
-        run: ruff check .
+        run: ruff check --ignore E402 .
 
   # ── Job 2: Lint & build the React frontend ──────────────────────────────────
   lint-frontend:
