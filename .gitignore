@@ -1,0 +1,47 @@
+# ── Python ──────────────────────────────────────────────
+*.pyc
+__pycache__/
+*.egg-info/
+*.egg
+dist/
+build/
+*.pyo
+
+# ── Virtual environments ────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Environment and secrets ─────────────────────────────
+.env
+.env.*
+
+# ── Logs ────────────────────────────────────────────────
+logs/
+*.log
+
+# ── IDE / Editor ────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ── Evaluation outputs ──────────────────────────────────
+squad_eval_results.json
+
+# ── HuggingFace model cache ─────────────────────────────
+.cache/
+
+# ── Frontend (Node / Vite / TanStack Start) ─────────────
+frontend/node_modules/
+frontend/.output/
+frontend/.tanstack/
+frontend/.wrangler/
+frontend/dist/
+
+# ── Scratch & Temp files ────────────────────────────────
+test.txt
+Notes.txt
+
