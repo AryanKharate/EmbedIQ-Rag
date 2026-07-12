@@ -214,7 +214,8 @@ export function ChatView({ threadId }: Props) {
             </Button>
           </div>
           <p className="mt-2 text-center text-[11px] text-muted-foreground">
-            ⚠️ AI-generated responses may contain inaccuracies. Please verify important information before making decisions.
+            ⚠️ AI-generated responses may contain inaccuracies. Please verify
+            important information before making decisions.
           </p>
         </form>
       </div>
@@ -244,11 +245,21 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         </div>
         {message.sources && message.sources.length > 0 && (
           <div className="mt-2 flex flex-col gap-2">
-            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Sources & Images</h4>
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              Sources & Images
+            </h4>
             <div className="flex flex-wrap gap-2">
-              {message.sources.flatMap(s => s.image_urls || []).filter((v, i, a) => a.indexOf(v) === i).map((url, i) => (
-                <img key={i} src={`http://localhost:8000${url}`} alt="Source content" className="max-w-[200px] rounded-md border border-border/50 shadow-sm object-cover" />
-              ))}
+              {message.sources
+                .flatMap((s) => s.image_urls || [])
+                .filter((v, i, a) => a.indexOf(v) === i)
+                .map((url, i) => (
+                  <img
+                    key={i}
+                    src={`http://localhost:8000${url}`}
+                    alt="Source content"
+                    className="max-w-[200px] rounded-md border border-border/50 shadow-sm object-cover"
+                  />
+                ))}
             </div>
           </div>
         )}
