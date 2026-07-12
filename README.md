@@ -1,7 +1,7 @@
 # EmbedIQ: Enterprise-Grade RAG Platform 🧠
 
 [![CI Status](https://github.com/AryanKharate/EmbedIQ-Rag/actions/workflows/ci.yml/badge.svg)](https://github.com/AryanKharate/EmbedIQ-Rag/actions/workflows/ci.yml)
-![EmbedIQ Banner](https://via.placeholder.com/1200x300.png?text=EmbedIQ+-+Retrieval-Augmented+Generation+Platform) *(You can replace this with an actual screenshot of your UI)*
+![EmbedIQ Banner](frontend/assets/UI_SS.png)
 
 **EmbedIQ** is a full-stack, containerized AI platform demonstrating advanced Retrieval-Augmented Generation (RAG) capabilities. It allows users to ingest custom documents, perform high-accuracy semantic searches, and interact with the data through a modern, responsive chat interface. 
 

@@ -45,3 +45,6 @@ frontend/dist/
 test.txt
 Notes.txt
 
+# ── User Media & Uploads ────────────────────────────────
+media/
+
