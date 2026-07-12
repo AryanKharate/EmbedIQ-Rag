@@ -30,9 +30,18 @@ export interface ApiDocument {
   created_at: string;
 }
 
+export interface Source {
+  source: string;
+  chunk_index?: number;
+  parent_id?: string;
+  score?: number;
+  image_urls?: string[];
+}
+
 export interface QueryResponse {
   answer: string;
   session_id: string;
+  sources?: Source[];
 }
 
 /* ───────── Documents ───────── */

@@ -1,5 +1,6 @@
 # EmbedIQ: Enterprise-Grade RAG Platform 🧠
 
+[![CI Status](https://github.com/AryanKharate/EmbedIQ-Rag/actions/workflows/ci.yml/badge.svg)](https://github.com/AryanKharate/EmbedIQ-Rag/actions/workflows/ci.yml)
 ![EmbedIQ Banner](https://via.placeholder.com/1200x300.png?text=EmbedIQ+-+Retrieval-Augmented+Generation+Platform) *(You can replace this with an actual screenshot of your UI)*
 
 **EmbedIQ** is a full-stack, containerized AI platform demonstrating advanced Retrieval-Augmented Generation (RAG) capabilities. It allows users to ingest custom documents, perform high-accuracy semantic searches, and interact with the data through a modern, responsive chat interface. 
@@ -33,9 +34,10 @@ Designed with production-readiness in mind, it implements advanced retrieval tec
 *   PostgreSQL (Relational Database)
 *   HuggingFace / OpenAI Integrations
 
-**Infrastructure**
+**Infrastructure & DevOps**
 *   Docker & Docker Compose
 *   Nginx (Reverse Proxy)
+*   GitHub Actions (CI Pipeline)
 
 ---
 
@@ -112,6 +114,15 @@ EmbedIQ/
 ├── docker-compose.yml  # Multi-container orchestration
 └── Dockerfile          # Backend container definition
 ```
+
+---
+
+## 🔄 Continuous Integration (CI)
+
+This project is configured with a robust **GitHub Actions** CI pipeline. On every push and Pull Request, it automatically:
+1. Runs **Ruff** to enforce Python style guidelines and lint the Django backend.
+2. Runs **ESLint** to validate the React frontend.
+3. Performs a strict **Vite Build** check to ensure TypeScript compiles correctly.
 
 ---
 *Designed and built by [Aryan Kharate](https://github.com/AryanKharate).*

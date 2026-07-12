@@ -38,3 +38,5 @@ typing-inspection==0.4.2
 typing_extensions==4.16.0
 urllib3==2.7.0
 websockets==16.0
+fastembed
+pymupdf

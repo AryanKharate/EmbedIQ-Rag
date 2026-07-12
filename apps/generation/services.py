@@ -41,6 +41,8 @@ def build_contents(query: str, chunks: list, history: list[dict]) -> list[dict]:
     context_chunks = []
     sources = []
     
+    from apps.retrieval.models import DocumentImage
+    
     for c in chunks:
         # Prefer parent_text (for new chunks), fallback to text (for old chunks)
         chunk_text = c.payload.get("parent_text") or c.payload.get("text")
@@ -52,11 +54,21 @@ def build_contents(query: str, chunks: list, history: list[dict]) -> list[dict]:
             context_chunks.append(
                 f"[Source: {source}]\n{chunk_text}"
             )
+            
+            # Fetch images for this document and page
+            doc_id = c.payload.get("document_id")
+            page_num = c.payload.get("page_number")
+            image_urls = []
+            if doc_id and page_num:
+                images = DocumentImage.objects.filter(document_id=doc_id, page_number=page_num)
+                image_urls = [img.image.url for img in images if img.image]
+
             sources.append({
                 "source": source,
                 "chunk_index": c.payload.get("chunk_index"),
                 "parent_id": c.payload.get("parent_id"),
                 "score": getattr(c, "score", None),
+                "image_urls": image_urls,
             })
             
     context_text = "\n\n---\n\n".join(context_chunks)
@@ -83,7 +95,7 @@ def ask(
     query: str,
     history: list[dict] | None = None,
     model: str | None = None,
-) -> str:
+) -> tuple[str, list[dict]]:
     """
     Full conversational RAG pipeline:
       1. Rewrite the query using conversation history (so vague follow-ups work)
@@ -116,7 +128,7 @@ def ask(
     t_retrieve = time.time() - t0
 
     if not chunks:
-        return "No relevant chunks found in the collection."
+        return "No relevant chunks found in the collection.", []
 
     # Step 3: build multi-turn contents list
     contents, sources = build_contents(query, chunks, history)
@@ -157,8 +169,8 @@ def ask(
         # Check if the response was blocked by safety filters
         if hasattr(response, "prompt_feedback") and response.prompt_feedback:
             logger.warning("Response blocked by safety filters: %s", response.prompt_feedback)
-            return "I'm unable to answer that question due to content safety restrictions."
+            return "I'm unable to answer that question due to content safety restrictions.", sources
         logger.warning("Model returned empty response for query: %s...", query[:50])
-        return "I was unable to generate a response. Please try rephrasing your question."
+        return "I was unable to generate a response. Please try rephrasing your question.", sources
 
-    return response.text
+    return response.text, sources

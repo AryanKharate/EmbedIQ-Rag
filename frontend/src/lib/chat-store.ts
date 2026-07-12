@@ -1,3 +1,5 @@
+import { type Source } from "./api";
+
 export type ChatRole = "user" | "assistant";
 
 export interface ChatMessage {
@@ -5,6 +7,7 @@ export interface ChatMessage {
   role: ChatRole;
   content: string;
   createdAt: number;
+  sources?: Source[];
 }
 
 export interface ChatThread {

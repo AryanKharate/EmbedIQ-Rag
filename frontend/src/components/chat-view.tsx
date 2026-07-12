@@ -106,6 +106,7 @@ export function ChatView({ threadId }: Props) {
           role: "assistant",
           content: result.answer,
           createdAt: Date.now(),
+          sources: result.sources,
         };
 
         const finalThread: RagThread = {
@@ -213,7 +214,7 @@ export function ChatView({ threadId }: Props) {
             </Button>
           </div>
           <p className="mt-2 text-center text-[11px] text-muted-foreground">
-            Responses are generated from your active documents.
+            ⚠️ AI-generated responses may contain inaccuracies. Please verify important information before making decisions.
           </p>
         </form>
       </div>
@@ -230,15 +231,27 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           <Sparkles className="h-4 w-4" />
         </div>
       )}
-      <div
-        className={cn(
-          "max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-[15px] leading-6",
-          isUser
-            ? "bg-primary text-primary-foreground"
-            : "bg-muted text-foreground",
+      <div className="flex flex-col gap-2 max-w-[85%]">
+        <div
+          className={cn(
+            "whitespace-pre-wrap rounded-2xl px-4 py-3 text-[15px] leading-6",
+            isUser
+              ? "bg-primary text-primary-foreground"
+              : "bg-muted text-foreground",
+          )}
+        >
+          {message.content}
+        </div>
+        {message.sources && message.sources.length > 0 && (
+          <div className="mt-2 flex flex-col gap-2">
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Sources & Images</h4>
+            <div className="flex flex-wrap gap-2">
+              {message.sources.flatMap(s => s.image_urls || []).filter((v, i, a) => a.indexOf(v) === i).map((url, i) => (
+                <img key={i} src={`http://localhost:8000${url}`} alt="Source content" className="max-w-[200px] rounded-md border border-border/50 shadow-sm object-cover" />
+              ))}
+            </div>
+          </div>
         )}
-      >
-        {message.content}
       </div>
     </li>
   );

@@ -97,15 +97,11 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarHeader className="gap-3 px-3 pt-3">
         <div className="flex items-center gap-2 px-1">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <span className="text-sm font-semibold">R</span>
-          </div>
-          <div className="flex flex-col">
-            <span className="text-sm font-semibold leading-none">Ragbot</span>
-            <span className="text-xs text-muted-foreground">
-              Chat with your documents
-            </span>
-          </div>
+          <img
+            src="/logo.png"
+            alt="EmbedIQ Logo"
+            className="h-8 w-auto object-contain"
+          />
         </div>
         <Button
           onClick={handleNewChat}

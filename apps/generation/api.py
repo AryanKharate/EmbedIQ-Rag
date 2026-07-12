@@ -33,6 +33,7 @@ class QueryIn(Schema):
 class QueryOut(Schema):
     answer: str
     session_id: str  # always returned — pass it back to continue the thread
+    sources: list[dict] = []
 
 
 @api.post("/query", response=QueryOut, summary="Ask a question over the corpus")
@@ -65,7 +66,7 @@ def query_endpoint(request, payload: QueryIn) -> QueryOut:
     history = get_history(session)
 
     # 3–6. Full conversational RAG
-    answer = ask(question, history=history)
+    answer, sources = ask(question, history=history)
 
     # 7. Persist this exchange
     save_turn(session, "user", question)
@@ -73,4 +74,4 @@ def query_endpoint(request, payload: QueryIn) -> QueryOut:
 
     logger.info("Successfully generated answer for session: %s", session.id)
 
-    return QueryOut(answer=answer, session_id=str(session.id))
+    return QueryOut(answer=answer, session_id=str(session.id), sources=sources)

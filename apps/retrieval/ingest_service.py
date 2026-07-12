@@ -17,8 +17,9 @@ from qdrant_client.models import (
     SparseVectorParams,
     VectorParams,
 )
+from django.core.files.base import ContentFile
 
-from .models import Document
+from .models import Document, DocumentImage
 
 logger = logging.getLogger(__name__)
 
@@ -148,18 +149,41 @@ def _validate_upload(filename: str, file_bytes: bytes) -> None:
         )
 
 
-def extract_text_from_bytes(filename: str, file_bytes: bytes) -> str:
-    """Extract text depending on file extension."""
-    if filename.lower().endswith(".pdf"):
-        # Use PyMuPDF to extract text from PDF bytes — context manager ensures cleanup
+def extract_text_from_bytes(db_doc: Document, file_bytes: bytes) -> list[dict]:
+    """Extract text by page and save extracted images."""
+    pages_data = []
+    if db_doc.filename.lower().endswith(".pdf"):
+        # Use PyMuPDF to extract text from PDF bytes
         with fitz.open(stream=file_bytes, filetype="pdf") as doc:
-            text_parts = []
-            for page in doc:
-                text_parts.append(page.get_text())
-            return "\n\n".join(text_parts)
+            for page_num, page in enumerate(doc, start=1):
+                text = page.get_text()
+                
+                # Extract images on this page
+                image_list = page.get_images(full=True)
+                for img_index, img in enumerate(image_list):
+                    xref = img[0]
+                    # Use Pixmap instead of extract_image to properly apply colorspaces and decode arrays (fixes inverted colors)
+                    pix = fitz.Pixmap(doc, xref)
+                    
+                    # Convert to RGB if it's CMYK or has weird components
+                    if pix.n - pix.alpha > 3:
+                        pix = fitz.Pixmap(fitz.csRGB, pix)
+                        
+                    image_bytes = pix.tobytes("png")
+                    image_ext = "png"
+                    image_filename = f"{db_doc.filename}_p{page_num}_i{img_index}.{image_ext}"
+                    
+                    # Save image to DocumentImage model
+                    doc_img = DocumentImage(document=db_doc, page_number=page_num)
+                    doc_img.image.save(image_filename, ContentFile(image_bytes))
+                    doc_img.save()
+
+                pages_data.append({"page_number": page_num, "text": text})
     else:
-        # Default to utf-8 text
-        return file_bytes.decode("utf-8")
+        # Default to utf-8 text, page 1
+        pages_data.append({"page_number": 1, "text": file_bytes.decode("utf-8")})
+    
+    return pages_data
 
 
 def ingest_document(filename: str, file_bytes: bytes) -> Document:
@@ -169,29 +193,39 @@ def ingest_document(filename: str, file_bytes: bytes) -> Document:
 
     ensure_collection()
     
-    # Extract text
-    text = extract_text_from_bytes(filename, file_bytes)
-    
     # Create DB record
     db_doc = Document.objects.create(filename=filename, is_active=True)
+    
+    # Extract text and images per page
+    pages_data = extract_text_from_bytes(db_doc, file_bytes)
 
-    # 1. Chunk into large parent contexts (with overlap for children)
-    parent_chunks = _chunk_text(text, settings.PARENT_CHUNK_SIZE)
-    if not parent_chunks:
+    # 1. Chunk into large parent contexts per page
+    parent_chunks_with_metadata = []
+    for page_data in pages_data:
+        p_chunks = _chunk_text(page_data["text"], settings.PARENT_CHUNK_SIZE)
+        for c in p_chunks:
+            parent_chunks_with_metadata.append({
+                "page_number": page_data["page_number"],
+                "text": c
+            })
+            
+    if not parent_chunks_with_metadata:
         return db_doc
 
     child_chunks_flat = []
     child_to_parent_map = []
     child_to_parent_idx = []
+    child_to_page_num = []
     
     # 2. Sub-chunk into small child vectors with overlap
     child_overlap = max(0, settings.CHILD_CHUNK_SIZE // 10)  # ~10% overlap
-    for parent_idx, parent in enumerate(parent_chunks):
-        children = _chunk_text(parent, settings.CHILD_CHUNK_SIZE, overlap=child_overlap)
+    for parent_idx, parent_obj in enumerate(parent_chunks_with_metadata):
+        children = _chunk_text(parent_obj["text"], settings.CHILD_CHUNK_SIZE, overlap=child_overlap)
         for child in children:
             child_chunks_flat.append(child)
-            child_to_parent_map.append(parent)
+            child_to_parent_map.append(parent_obj["text"])
             child_to_parent_idx.append(parent_idx)
+            child_to_page_num.append(parent_obj["page_number"])
 
     # 3. Embed dense (we only embed the children)
     dense_vectors = _embed_dense_batch(child_chunks_flat)
@@ -203,8 +237,8 @@ def ingest_document(filename: str, file_bytes: bytes) -> Document:
     doc_id_str = str(db_doc.id)
     points: list[PointStruct] = []
 
-    for idx, (child, dense_vec, sparse_vec, parent, parent_idx) in enumerate(
-        zip(child_chunks_flat, dense_vectors, sparse_vectors, child_to_parent_map, child_to_parent_idx)
+    for idx, (child, dense_vec, sparse_vec, parent, parent_idx, page_num) in enumerate(
+        zip(child_chunks_flat, dense_vectors, sparse_vectors, child_to_parent_map, child_to_parent_idx, child_to_page_num)
     ):
         # Deterministic point ID: hash of (document_id, parent_index, child_index)
         id_seed = f"{doc_id_str}:{parent_idx}:{idx}"
@@ -224,6 +258,7 @@ def ingest_document(filename: str, file_bytes: bytes) -> Document:
                     "source": filename,
                     "chunk_index": idx,
                     "document_id": doc_id_str,
+                    "page_number": page_num,
                     "is_active": True,
                 },
             )

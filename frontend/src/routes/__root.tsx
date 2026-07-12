@@ -88,18 +88,18 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       meta: [
         { charSet: "utf-8" },
         { name: "viewport", content: "width=device-width, initial-scale=1" },
-        { title: "Ragbot — Chat with your documents" },
+        { title: "EmbedIQ — Chat with your documents" },
         {
           name: "description",
           content:
-            "A ChatGPT-style RAG chatbot: chat with your active documents and toggle sources on or off.",
+            "EmbedIQ: An enterprise-grade RAG platform. Chat with your documents using HyDE, CRAG, and vector search.",
         },
-        { name: "author", content: "Ragbot" },
-        { property: "og:title", content: "Ragbot — Chat with your documents" },
+        { name: "author", content: "EmbedIQ" },
+        { property: "og:title", content: "EmbedIQ — Chat with your documents" },
         {
           property: "og:description",
           content:
-            "A ChatGPT-style RAG chatbot: chat with your active documents and toggle sources on or off.",
+            "EmbedIQ: An enterprise-grade RAG platform. Chat with your documents using HyDE, CRAG, and vector search.",
         },
         { property: "og:type", content: "website" },
         { name: "twitter:card", content: "summary_large_image" },
@@ -141,7 +141,7 @@ function RootComponent() {
           <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
             <SidebarTrigger />
             <span className="text-sm font-medium text-muted-foreground">
-              Ragbot
+              EmbedIQ
             </span>
           </header>
           <div className="min-h-0 flex-1">
