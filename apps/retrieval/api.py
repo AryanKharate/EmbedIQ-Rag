@@ -11,6 +11,7 @@ from .ingest_service import ingest_document
 from qdrant_client import QdrantClient
 from django.conf import settings
 from qdrant_client.models import Filter, FieldCondition, MatchValue
+from apps.accounts.auth import jwt_auth
 
 router = Router(tags=["Documents"])
 
@@ -28,12 +29,13 @@ class DocumentStatusUpdate(Schema):
     is_active: bool
 
 
-@router.get("/", response=list[DocumentSchema], summary="List all ingested documents")
+@router.get("/", response=list[DocumentSchema], auth=jwt_auth, summary="List all ingested documents")
 def list_documents(request):
-    """Returns a list of all documents currently ingested and tracked."""
-    logger.info("Fetching list of all documents")
-    docs = Document.objects.all().order_by("-created_at")
-    logger.info(f"Retrieved {len(docs)} documents")
+    """Returns all documents owned by the authenticated user."""
+    user = request.auth
+    logger.info("Fetching documents for user: %s", user.id)
+    docs = Document.objects.filter(owner=user).order_by("-created_at")
+    logger.info("Retrieved %d documents for user %s", len(docs), user.id)
     return [
         {
             "id": d.id,
@@ -45,17 +47,18 @@ def list_documents(request):
     ]
 
 
-@router.post("/upload", response=DocumentSchema, summary="Upload and ingest a document (.txt or .pdf)")
+@router.post("/upload", response=DocumentSchema, auth=jwt_auth, summary="Upload and ingest a document (.txt, .pdf, or .md)")
 def upload_document(request, file: UploadedFile = File(...)):
     """
     Ingests a document directly via API.
-    Supports .txt and .pdf files.
-    Extracts text, chunks it, embeds it, and upserts to Qdrant.
+    The document is owned by the authenticated user.
+    Supports .txt, .pdf, and .md files.
     """
-    logger.info(f"Starting upload for document: {file.name}")
+    user = request.auth
+    logger.info("Starting upload for document: %s (user=%s)", file.name, user.id)
     file_bytes = file.read()
-    doc = ingest_document(filename=file.name, file_bytes=file_bytes)
-    logger.info(f"Successfully uploaded and ingested document: {doc.id}")
+    doc = ingest_document(filename=file.name, file_bytes=file_bytes, owner=user)
+    logger.info("Successfully uploaded and ingested document: %s", doc.id)
     return {
         "id": doc.id,
         "filename": doc.filename,
@@ -64,14 +67,15 @@ def upload_document(request, file: UploadedFile = File(...)):
     }
 
 
-@router.patch("/{doc_id}/toggle", response=DocumentSchema, summary="Toggle document active status")
+@router.patch("/{doc_id}/toggle", response=DocumentSchema, auth=jwt_auth, summary="Toggle document active status")
 def toggle_document(request, doc_id: uuid.UUID, payload: DocumentStatusUpdate):
     """
     Sets a document as active or inactive.
-    Inactive documents will be skipped during Qdrant vector searches.
+    Only the owning user can toggle their own documents.
     """
-    logger.info(f"Toggling document {doc_id} active status to {payload.is_active}")
-    doc = get_object_or_404(Document, id=doc_id)
+    user = request.auth
+    logger.info("Toggling document %s active status to %s (user=%s)", doc_id, payload.is_active, user.id)
+    doc = get_object_or_404(Document, id=doc_id, owner=user)
     doc.is_active = payload.is_active
     doc.save()
 
@@ -84,7 +88,7 @@ def toggle_document(request, doc_id: uuid.UUID, payload: DocumentStatusUpdate):
         ),
     )
 
-    logger.info(f"Successfully toggled document {doc_id}")
+    logger.info("Successfully toggled document %s", doc_id)
 
     return {
         "id": doc.id,
@@ -94,14 +98,16 @@ def toggle_document(request, doc_id: uuid.UUID, payload: DocumentStatusUpdate):
     }
 
 
-@router.delete("/{doc_id}", summary="Delete a document and its vectors")
+@router.delete("/{doc_id}", auth=jwt_auth, summary="Delete a document and its vectors")
 def delete_document(request, doc_id: uuid.UUID):
     """
     Deletes the document from the database and removes all its chunk vectors from Qdrant.
+    Only the owning user can delete their own documents.
     """
-    logger.info(f"Deleting document {doc_id} and its vectors")
-    doc = get_object_or_404(Document, id=doc_id)
-    
+    user = request.auth
+    logger.info("Deleting document %s (user=%s)", doc_id, user.id)
+    doc = get_object_or_404(Document, id=doc_id, owner=user)
+
     # Delete from Qdrant
     _qdrant_client.delete(
         collection_name=settings.COLLECTION_NAME,
@@ -109,9 +115,9 @@ def delete_document(request, doc_id: uuid.UUID):
             must=[FieldCondition(key="document_id", match=MatchValue(value=str(doc.id)))]
         )
     )
-    
+
     # Delete from Postgres
     doc.delete()
-    
-    logger.info(f"Successfully deleted document {doc_id}")
+
+    logger.info("Successfully deleted document %s", doc_id)
     return {"success": True, "message": f"Document {doc.filename} deleted."}

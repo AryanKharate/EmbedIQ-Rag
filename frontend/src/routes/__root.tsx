@@ -4,10 +4,13 @@ import {
   Link,
   createRootRouteWithContext,
   useRouter,
+  useNavigate,
   HeadContent,
   Scripts,
+  useRouterState,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
+import { GoogleOAuthProvider } from "@react-oauth/google";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -18,6 +21,16 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
+import { isAuthenticated, logout } from "@/lib/auth";
+import { Button } from "@/components/ui/button";
+import { LogOut } from "lucide-react";
+import { useHydrated } from "@/hooks/use-hydrated";
+
+// Google OAuth client ID — set VITE_GOOGLE_CLIENT_ID in your .env
+// May be empty string if not configured; we conditionally wrap with the provider.
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "";
+const hasGoogleAuth =
+  !!GOOGLE_CLIENT_ID && !GOOGLE_CLIENT_ID.startsWith("your-google-client-id");
 
 function NotFoundComponent() {
   return (
@@ -130,26 +143,93 @@ function RootShell({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * Conditionally wraps children with GoogleOAuthProvider only when a real
+ * client ID is configured. This prevents the provider from crashing when
+ * VITE_GOOGLE_CLIENT_ID is empty or a placeholder.
+ */
+function MaybeGoogleProvider({ children }: { children: ReactNode }) {
+  if (!hasGoogleAuth) return <>{children}</>;
+  return (
+    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
+      {children}
+    </GoogleOAuthProvider>
+  );
+}
+
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  const routerState = useRouterState();
+  const currentPath = routerState.location.pathname;
+  const isPublicRoute = currentPath === "/login" || currentPath === "/register";
 
+  // useHydrated() is false on the server; true only after browser mounts.
+  // This prevents any localStorage/window access during SSR.
+  const hydrated = useHydrated();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!hydrated) return;
+    if (!isPublicRoute && !isAuthenticated()) {
+      void navigate({ to: "/login" });
+    }
+  }, [hydrated, isPublicRoute, navigate]);
+
+  // Before hydration: render the outlet with no providers that touch browser APIs
+  if (!hydrated) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <Outlet />
+        <Toaster />
+      </QueryClientProvider>
+    );
+  }
+
+  // After hydration: safe to check localStorage / render browser-only providers
   return (
-    <QueryClientProvider client={queryClient}>
-      <SidebarProvider>
-        <AppSidebar />
-        <SidebarInset className="flex h-svh flex-col">
-          <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
-            <SidebarTrigger />
-            <span className="text-sm font-medium text-muted-foreground">
-              EmbedIQ
-            </span>
-          </header>
-          <div className="min-h-0 flex-1">
+    <MaybeGoogleProvider>
+      <QueryClientProvider client={queryClient}>
+        {isPublicRoute ? (
+          // Public pages (login/register) — no sidebar
+          <>
             <Outlet />
-          </div>
-        </SidebarInset>
-      </SidebarProvider>
-      <Toaster />
-    </QueryClientProvider>
+            <Toaster />
+          </>
+        ) : !isAuthenticated() ? (
+          // Not authenticated — render nothing while useEffect redirect fires.
+          // This prevents AppSidebar from mounting and calling the API unauthenticated.
+          <Toaster />
+        ) : (
+          // Authenticated — full app shell with sidebar
+          <SidebarProvider>
+            <AppSidebar />
+            <SidebarInset className="flex h-svh flex-col">
+              <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
+                <SidebarTrigger />
+                <span className="text-sm font-medium text-muted-foreground">
+                  EmbedIQ
+                </span>
+                <div className="ml-auto">
+                  <Button
+                    id="logout-btn"
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 text-muted-foreground hover:text-foreground"
+                    onClick={() => logout()}
+                  >
+                    <LogOut className="h-4 w-4" />
+                    <span className="hidden sm:inline">Sign out</span>
+                  </Button>
+                </div>
+              </header>
+              <div className="min-h-0 flex-1">
+                <Outlet />
+              </div>
+            </SidebarInset>
+            <Toaster />
+          </SidebarProvider>
+        )}
+      </QueryClientProvider>
+    </MaybeGoogleProvider>
   );
 }

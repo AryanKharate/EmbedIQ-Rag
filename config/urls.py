@@ -20,6 +20,10 @@ from django.conf import settings
 from django.conf.urls.static import static
 from apps.generation.api import api
 from apps.generation.health import liveness, readiness
+from apps.accounts.api import router as auth_router
+
+# Mount the auth router on the shared NinjaAPI instance
+api.add_router("/auth", auth_router)
 
 urlpatterns = [
     path('admin/', admin.site.urls),

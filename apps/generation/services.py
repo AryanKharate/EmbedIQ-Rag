@@ -95,11 +95,12 @@ def ask(
     query: str,
     history: list[dict] | None = None,
     model: str | None = None,
+    user_id: str | None = None,
 ) -> tuple[str, list[dict]]:
     """
     Full conversational RAG pipeline:
       1. Rewrite the query using conversation history (so vague follow-ups work)
-      2. Embed the rewritten query and search Qdrant
+      2. Embed the rewritten query and search Qdrant (scoped to user_id if provided)
       3. Build a multi-turn contents list (history + new context + question)
       4. Generate the answer with Gemini using a system instruction
 
@@ -118,12 +119,18 @@ def ask(
     if settings.CRAG_ENABLED:
         from apps.retrieval.crag import corrective_retrieve
         search_fn = search_and_rerank if settings.RERANKER_ENABLED else search_chunks
-        chunks, crag_status = corrective_retrieve(search_query, search_fn)
-        
+        # Wrap search_fn to pass user_id
+        def _scoped_search(q, **kwargs):
+            return search_fn(q, user_id=user_id, **kwargs)
+        chunks, crag_status = corrective_retrieve(search_query, _scoped_search)
+
         if crag_status == "insufficient":
             return "I don't have enough relevant information in the knowledge base to answer that confidently."
     else:
-        chunks = search_and_rerank(search_query) if settings.RERANKER_ENABLED else search_chunks(search_query)
+        if settings.RERANKER_ENABLED:
+            chunks = search_and_rerank(search_query, user_id=user_id)
+        else:
+            chunks = search_chunks(search_query, user_id=user_id)
         crag_status = "ok"
     t_retrieve = time.time() - t0
 

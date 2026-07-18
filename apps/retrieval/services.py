@@ -93,7 +93,7 @@ def get_dense_query_vector(query: str) -> list[float]:
     return [(a + b) / 2 for a, b in zip(raw_vec, hyde_vec)]
 
 
-def search_chunks(query: str, top_k: int | None = None) -> list:
+def search_chunks(query: str, top_k: int | None = None, user_id: str | None = None) -> list:
     """
     Hybrid search: dense (semantic) + sparse (BM25 keyword) with RRF fusion.
 
@@ -107,6 +107,8 @@ def search_chunks(query: str, top_k: int | None = None) -> list:
 
     Prefetch limit = top_k * 4 so RRF has enough candidates from each branch
     before truncating to the final top_k.
+
+    user_id: when provided, restricts results to vectors uploaded by that user.
     """
     k = top_k if top_k is not None else settings.TOP_K
     prefetch_limit = k * 4
@@ -115,10 +117,12 @@ def search_chunks(query: str, top_k: int | None = None) -> list:
     sparse_vec = embed_sparse(query)
 
     from qdrant_client.models import Filter, FieldCondition, MatchValue
-    
-    query_filter = Filter(
-        must=[FieldCondition(key="is_active", match=MatchValue(value=True))]
-    )
+
+    must_conditions = [FieldCondition(key="is_active", match=MatchValue(value=True))]
+    if user_id:
+        must_conditions.append(FieldCondition(key="user_id", match=MatchValue(value=user_id)))
+
+    query_filter = Filter(must=must_conditions)
 
     hits = _qdrant_client.query_points(
         collection_name=settings.COLLECTION_NAME,
@@ -145,7 +149,7 @@ def search_chunks(query: str, top_k: int | None = None) -> list:
     return deduped_hits
 
 
-def search_and_rerank(query: str, top_k: int | None = None) -> list:
+def search_and_rerank(query: str, top_k: int | None = None, user_id: str | None = None) -> list:
     """
     Full retrieval pipeline with cross-encoder reranking.
 
@@ -160,10 +164,12 @@ def search_and_rerank(query: str, top_k: int | None = None) -> list:
 
     The output format is identical to search_chunks() — a list of ScoredPoint
     objects — so generation/services.py.build_contents() needs no changes.
+
+    user_id: when provided, restricts search to that user's vectors.
     """
     from .reranker import reranker
 
-    candidates = search_chunks(query, top_k=settings.RERANK_CANDIDATE_LIMIT)
+    candidates = search_chunks(query, top_k=settings.RERANK_CANDIDATE_LIMIT, user_id=user_id)
     reranked = reranker.rerank(query, candidates, top_k=settings.RERANK_CANDIDATE_LIMIT)
 
     # We deduplicate again just in case the reranker reordered things such that

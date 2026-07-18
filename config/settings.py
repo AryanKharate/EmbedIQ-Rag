@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'apps.retrieval.apps.RetrievalConfig',
     'apps.generation',
     'apps.conversations',
+    'apps.accounts',
 ]
 
 MIDDLEWARE = [
@@ -167,6 +168,26 @@ if HYDE_MODE not in _VALID_HYDE_MODES:
 CRAG_ENABLED = os.environ.get('CRAG_ENABLED', 'false').lower() == 'true'
 CRAG_CONFIDENCE_THRESHOLD = float(os.environ.get('CRAG_CONFIDENCE_THRESHOLD', '0.6'))
 CRAG_MIN_RELEVANT_CHUNKS = int(os.environ.get('CRAG_MIN_RELEVANT_CHUNKS', '2'))
+
+# --- Table ingestion config ---
+# Max data rows per table chunk. The header row is repeated in every batch.
+# Prevents a single large table from exceeding the LLM context window.
+TABLE_ROW_BATCH_SIZE = int(os.environ.get('TABLE_ROW_BATCH_SIZE', 20))
+
+# --- Authentication & JWT ---
+from datetime import timedelta  # noqa: E402
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ALGORITHM": "HS256",
+    "SIGNING_KEY": SECRET_KEY,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "UPDATE_LAST_LOGIN": True,
+}
+
+# Google OAuth2 client ID — set this in .env
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
 
 # --- Logging config ---
 os.makedirs(BASE_DIR / 'logs', exist_ok=True)

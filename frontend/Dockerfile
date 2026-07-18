@@ -11,6 +11,8 @@ RUN npm ci --legacy-peer-deps
 COPY . .
 
 # Build using node-server Nitro preset
+ARG VITE_GOOGLE_CLIENT_ID
+ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
 ENV DOCKER_BUILD=1
 RUN npm run build
 

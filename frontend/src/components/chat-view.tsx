@@ -1,4 +1,6 @@
 import { ArrowUp, FileText, Sparkles } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   useCallback,
   useEffect,
@@ -235,13 +237,121 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       <div className="flex flex-col gap-2 max-w-[85%]">
         <div
           className={cn(
-            "whitespace-pre-wrap rounded-2xl px-4 py-3 text-[15px] leading-6",
+            "rounded-2xl px-4 py-3 text-[15px] leading-6",
             isUser
-              ? "bg-primary text-primary-foreground"
-              : "bg-muted text-foreground",
+              ? "bg-primary text-primary-foreground whitespace-pre-wrap"
+              : "bg-muted text-foreground prose-bubble",
           )}
         >
-          {message.content}
+          {isUser ? (
+            message.content
+          ) : (
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                // Headings
+                h1: ({ children }) => (
+                  <h1 className="text-xl font-bold mb-3 mt-1 text-foreground">
+                    {children}
+                  </h1>
+                ),
+                h2: ({ children }) => (
+                  <h2 className="text-lg font-semibold mb-2 mt-4 text-foreground">
+                    {children}
+                  </h2>
+                ),
+                h3: ({ children }) => (
+                  <h3 className="text-base font-semibold mb-1 mt-3 text-foreground">
+                    {children}
+                  </h3>
+                ),
+                // Paragraphs
+                p: ({ children }) => (
+                  <p className="mb-3 last:mb-0 leading-7">{children}</p>
+                ),
+                // Ordered list — numbered
+                ol: ({ children }) => (
+                  <ol className="list-decimal list-outside ml-5 mb-3 space-y-2">
+                    {children}
+                  </ol>
+                ),
+                // Unordered list — bullets
+                ul: ({ children }) => (
+                  <ul className="list-disc list-outside ml-5 mb-3 space-y-1">
+                    {children}
+                  </ul>
+                ),
+                li: ({ children }) => (
+                  <li className="leading-7 pl-1">{children}</li>
+                ),
+                // Bold
+                strong: ({ children }) => (
+                  <strong className="font-semibold text-foreground">
+                    {children}
+                  </strong>
+                ),
+                // Italic
+                em: ({ children }) => (
+                  <em className="italic text-muted-foreground">{children}</em>
+                ),
+                // Inline code
+                code: ({ children, className }) => {
+                  const isBlock = className?.includes("language-");
+                  return isBlock ? (
+                    <code
+                      className={cn(
+                        "block bg-background/80 border border-border/50 rounded-lg px-3 py-2 text-[13px] font-mono overflow-x-auto my-2",
+                        className,
+                      )}
+                    >
+                      {children}
+                    </code>
+                  ) : (
+                    <code className="bg-background/80 border border-border/40 rounded px-1.5 py-0.5 text-[13px] font-mono">
+                      {children}
+                    </code>
+                  );
+                },
+                // Code block wrapper
+                pre: ({ children }) => (
+                  <pre className="bg-background/80 border border-border/50 rounded-xl p-4 overflow-x-auto my-3 text-[13px] font-mono">
+                    {children}
+                  </pre>
+                ),
+                // Blockquote
+                blockquote: ({ children }) => (
+                  <blockquote className="border-l-4 border-primary/40 pl-4 italic text-muted-foreground my-3">
+                    {children}
+                  </blockquote>
+                ),
+                // Horizontal rule
+                hr: () => <hr className="border-border/40 my-4" />,
+                // Tables
+                table: ({ children }) => (
+                  <div className="overflow-x-auto my-3">
+                    <table className="w-full text-sm border-collapse">
+                      {children}
+                    </table>
+                  </div>
+                ),
+                thead: ({ children }) => (
+                  <thead className="bg-background/60">{children}</thead>
+                ),
+                th: ({ children }) => (
+                  <th className="border border-border/40 px-3 py-2 text-left font-semibold">
+                    {children}
+                  </th>
+                ),
+                td: ({ children }) => (
+                  <td className="border border-border/40 px-3 py-2">
+                    {children}
+                  </td>
+                ),
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
+          )}
         </div>
         {message.sources && message.sources.length > 0 && (
           <div className="mt-2 flex flex-col gap-2">

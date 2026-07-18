@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { documentsApi, type ApiDocument } from "./api";
+import { isAuthenticated } from "./auth";
 import { toast } from "sonner";
 
 export type { ApiDocument };
@@ -14,6 +15,8 @@ export function useDocuments() {
     queryKey: DOCS_KEY,
     queryFn: documentsApi.list,
     staleTime: 30_000,
+    enabled: isAuthenticated(), // never fires when logged out
+    retry: false, // don't retry on 401
   });
 }
 

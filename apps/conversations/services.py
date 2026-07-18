@@ -8,21 +8,26 @@ stay decoupled from Django ORM details.
 from __future__ import annotations
 
 from django.conf import settings
+from django.contrib.auth.models import User
 
 from .models import ConversationSession, ConversationTurn
 
 
-def get_or_create_session(session_id: str | None) -> ConversationSession:
+def get_or_create_session(session_id: str | None, user: User | None = None) -> ConversationSession:
     """
     Return an existing session by UUID, or create a new one.
     If session_id is None or not found, a fresh session is returned.
+    The session is scoped to the given user when provided.
     """
     if session_id:
         try:
-            return ConversationSession.objects.get(pk=session_id)
+            qs = ConversationSession.objects.filter(pk=session_id)
+            if user is not None:
+                qs = qs.filter(user=user)
+            return qs.get()
         except ConversationSession.DoesNotExist:
             pass
-    return ConversationSession.objects.create()
+    return ConversationSession.objects.create(user=user)
 
 
 def get_history(

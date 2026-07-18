@@ -5,8 +5,12 @@ import {
   Trash2,
   Upload,
   Loader2,
+  LogOut,
+  UserCircle2,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+
+import { getUser, logout } from "@/lib/auth";
 
 import {
   Sidebar,
@@ -270,8 +274,36 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter className="px-3 pb-3">
-        <div className="rounded-md border border-dashed border-sidebar-border px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+      <SidebarFooter className="px-3 pb-3 pt-2">
+        {/* User info */}
+        {(() => {
+          const user = getUser();
+          return user ? (
+            <div className="flex items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <UserCircle2 className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[12px] font-medium text-foreground">
+                  {user.display_name}
+                </p>
+                <p className="truncate text-[10px] text-muted-foreground">
+                  {user.email}
+                </p>
+              </div>
+              <button
+                id="sidebar-logout-btn"
+                type="button"
+                onClick={() => logout()}
+                aria-label="Sign out"
+                className="shrink-0 rounded p-1 text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ) : null;
+        })()}
+        <div className="mt-2 rounded-md border border-dashed border-sidebar-border px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
           Toggle documents to control what the assistant can reference.
         </div>
       </SidebarFooter>
