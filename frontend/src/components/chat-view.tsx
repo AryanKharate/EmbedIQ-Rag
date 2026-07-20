@@ -14,6 +14,13 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
   deriveTitle,
@@ -39,9 +46,12 @@ export function ChatView({ threadId }: Props) {
   const [thread, setThread] = useState<RagThread | null>(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Ref to hold the mutable streaming thread without triggering extra re-renders
+  const streamingThreadRef = useRef<RagThread | null>(null);
 
   // Load the thread from storage
   useEffect(() => {
@@ -56,11 +66,11 @@ export function ChatView({ threadId }: Props) {
     textareaRef.current?.focus();
   }, [threadId]);
 
-  // Auto-scroll on new messages
+  // Auto-scroll on new messages or streaming content
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [thread?.messages.length, sending]);
+  }, [thread?.messages.length, sending, isStreaming]);
 
   const persist = useCallback((updated: RagThread) => {
     const all = loadThreads() as RagThread[];
@@ -99,34 +109,78 @@ export function ChatView({ threadId }: Props) {
       setInput("");
       setSending(true);
 
+      // Placeholder assistant message — content fills in as tokens arrive
+      const assistantMsgId = crypto.randomUUID();
+      const assistantPlaceholder: ChatMessage = {
+        id: assistantMsgId,
+        role: "assistant",
+        content: "",
+        createdAt: Date.now(),
+        sources: [],
+      };
+
       try {
-        // Call the real RAG backend
-        const result = await chatApi.query(text, thread.sessionId ?? null);
+        await chatApi.queryStream(text, thread.sessionId ?? null, {
+          onSources: (sources) => {
+            // Sources arrive before any text — insert the assistant bubble immediately
+            const withAssistant: RagThread = {
+              ...withUser,
+              messages: [
+                ...withUser.messages,
+                { ...assistantPlaceholder, sources },
+              ],
+            };
+            streamingThreadRef.current = withAssistant;
+            setThread(withAssistant);
+            setSending(false); // hide TypingBubble
+            setIsStreaming(true);
+          },
 
-        const assistantMsg: ChatMessage = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: result.answer,
-          createdAt: Date.now(),
-          sources: result.sources,
-        };
+          onToken: (tokenText) => {
+            const base = streamingThreadRef.current ?? withUser;
+            const updated: RagThread = {
+              ...base,
+              messages: base.messages.map((m) =>
+                m.id === assistantMsgId
+                  ? { ...m, content: m.content + tokenText }
+                  : m,
+              ),
+            };
+            streamingThreadRef.current = updated;
+            setThread(updated);
+          },
 
-        const finalThread: RagThread = {
-          ...withUser,
-          sessionId: result.session_id, // persist session for follow-ups
-          messages: [...withUser.messages, assistantMsg],
-          updatedAt: Date.now(),
-        };
-        setThread(finalThread);
-        persist(finalThread);
+          onDone: (session_id) => {
+            const final = streamingThreadRef.current ?? withUser;
+            const finalThread: RagThread = {
+              ...final,
+              sessionId: session_id,
+              updatedAt: Date.now(),
+            };
+            streamingThreadRef.current = null;
+            setIsStreaming(false);
+            setThread(finalThread);
+            persist(finalThread);
+          },
+
+          onError: (err) => {
+            const msg = err.message ?? "Something went wrong.";
+            setError(msg);
+            setSending(false);
+            setIsStreaming(false);
+            streamingThreadRef.current = null;
+            setThread(thread);
+          },
+        });
       } catch (err) {
         const msg =
           err instanceof Error ? err.message : "Something went wrong.";
         setError(msg);
-        // Remove the optimistic user message on error
+        setSending(false);
+        setIsStreaming(false);
+        streamingThreadRef.current = null;
         setThread(thread);
       } finally {
-        setSending(false);
         requestAnimationFrame(() => textareaRef.current?.focus());
       }
     },
@@ -141,7 +195,7 @@ export function ChatView({ threadId }: Props) {
   };
 
   const messages = thread?.messages ?? [];
-  const showEmpty = messages.length === 0 && !sending;
+  const showEmpty = messages.length === 0 && !sending && !isStreaming;
 
   const suggestions = useMemo(
     () => [
@@ -176,7 +230,15 @@ export function ChatView({ threadId }: Props) {
           ) : (
             <ul className="flex flex-col gap-6">
               {messages.map((m) => (
-                <MessageBubble key={m.id} message={m} />
+                <MessageBubble
+                  key={m.id}
+                  message={m}
+                  isStreaming={
+                    isStreaming &&
+                    m.role === "assistant" &&
+                    m.id === messages.at(-1)?.id
+                  }
+                />
               ))}
               {sending && <TypingBubble />}
             </ul>
@@ -208,7 +270,7 @@ export function ChatView({ threadId }: Props) {
             <Button
               type="submit"
               size="icon"
-              disabled={!input.trim() || sending}
+              disabled={!input.trim() || sending || isStreaming}
               className="absolute bottom-2 right-2 h-9 w-9 rounded-xl"
               aria-label="Send message"
             >
@@ -225,7 +287,13 @@ export function ChatView({ threadId }: Props) {
   );
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({
+  message,
+  isStreaming = false,
+}: {
+  message: ChatMessage;
+  isStreaming?: boolean;
+}) {
   const isUser = message.role === "user";
   return (
     <li className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}>
@@ -246,111 +314,142 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           {isUser ? (
             message.content
           ) : (
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                // Headings
-                h1: ({ children }) => (
-                  <h1 className="text-xl font-bold mb-3 mt-1 text-foreground">
-                    {children}
-                  </h1>
-                ),
-                h2: ({ children }) => (
-                  <h2 className="text-lg font-semibold mb-2 mt-4 text-foreground">
-                    {children}
-                  </h2>
-                ),
-                h3: ({ children }) => (
-                  <h3 className="text-base font-semibold mb-1 mt-3 text-foreground">
-                    {children}
-                  </h3>
-                ),
-                // Paragraphs
-                p: ({ children }) => (
-                  <p className="mb-3 last:mb-0 leading-7">{children}</p>
-                ),
-                // Ordered list — numbered
-                ol: ({ children }) => (
-                  <ol className="list-decimal list-outside ml-5 mb-3 space-y-2">
-                    {children}
-                  </ol>
-                ),
-                // Unordered list — bullets
-                ul: ({ children }) => (
-                  <ul className="list-disc list-outside ml-5 mb-3 space-y-1">
-                    {children}
-                  </ul>
-                ),
-                li: ({ children }) => (
-                  <li className="leading-7 pl-1">{children}</li>
-                ),
-                // Bold
-                strong: ({ children }) => (
-                  <strong className="font-semibold text-foreground">
-                    {children}
-                  </strong>
-                ),
-                // Italic
-                em: ({ children }) => (
-                  <em className="italic text-muted-foreground">{children}</em>
-                ),
-                // Inline code
-                code: ({ children, className }) => {
-                  const isBlock = className?.includes("language-");
-                  return isBlock ? (
-                    <code
-                      className={cn(
-                        "block bg-background/80 border border-border/50 rounded-lg px-3 py-2 text-[13px] font-mono overflow-x-auto my-2",
-                        className,
-                      )}
-                    >
+            <>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  // Headings
+                  h1: ({ children }) => (
+                    <h1 className="text-xl font-bold mb-3 mt-1 text-foreground">
                       {children}
-                    </code>
-                  ) : (
-                    <code className="bg-background/80 border border-border/40 rounded px-1.5 py-0.5 text-[13px] font-mono">
+                    </h1>
+                  ),
+                  h2: ({ children }) => (
+                    <h2 className="text-lg font-semibold mb-2 mt-4 text-foreground">
                       {children}
-                    </code>
-                  );
-                },
-                // Code block wrapper
-                pre: ({ children }) => (
-                  <pre className="bg-background/80 border border-border/50 rounded-xl p-4 overflow-x-auto my-3 text-[13px] font-mono">
-                    {children}
-                  </pre>
-                ),
-                // Blockquote
-                blockquote: ({ children }) => (
-                  <blockquote className="border-l-4 border-primary/40 pl-4 italic text-muted-foreground my-3">
-                    {children}
-                  </blockquote>
-                ),
-                // Horizontal rule
-                hr: () => <hr className="border-border/40 my-4" />,
-                // Tables
-                table: ({ children }) => (
-                  <div className="overflow-x-auto my-3">
-                    <table className="w-full text-sm border-collapse">
+                    </h2>
+                  ),
+                  h3: ({ children }) => (
+                    <h3 className="text-base font-semibold mb-1 mt-3 text-foreground">
                       {children}
-                    </table>
-                  </div>
-                ),
-                thead: ({ children }) => (
-                  <thead className="bg-background/60">{children}</thead>
-                ),
-                th: ({ children }) => (
-                  <th className="border border-border/40 px-3 py-2 text-left font-semibold">
-                    {children}
-                  </th>
-                ),
-                td: ({ children }) => (
-                  <td className="border border-border/40 px-3 py-2">
-                    {children}
-                  </td>
-                ),
-              }}
-            >
-              {message.content}
-            </ReactMarkdown>
+                    </h3>
+                  ),
+                  // Paragraphs
+                  p: ({ children }) => (
+                    <p className="mb-3 last:mb-0 leading-7">{children}</p>
+                  ),
+                  // Ordered list — numbered
+                  ol: ({ children }) => (
+                    <ol className="list-decimal list-outside ml-5 mb-3 space-y-2">
+                      {children}
+                    </ol>
+                  ),
+                  // Unordered list — bullets
+                  ul: ({ children }) => (
+                    <ul className="list-disc list-outside ml-5 mb-3 space-y-1">
+                      {children}
+                    </ul>
+                  ),
+                  li: ({ children }) => (
+                    <li className="leading-7 pl-1">{children}</li>
+                  ),
+                  // Bold
+                  strong: ({ children }) => (
+                    <strong className="font-semibold text-foreground">
+                      {children}
+                    </strong>
+                  ),
+                  // Italic
+                  em: ({ children }) => (
+                    <em className="italic text-muted-foreground">{children}</em>
+                  ),
+                  // Inline code
+                  code: ({ children, className }) => {
+                    const isBlock = className?.includes("language-");
+                    return isBlock ? (
+                      <code
+                        className={cn(
+                          "block bg-background/80 border border-border/50 rounded-lg px-3 py-2 text-[13px] font-mono overflow-x-auto my-2",
+                          className,
+                        )}
+                      >
+                        {children}
+                      </code>
+                    ) : (
+                      <code className="bg-background/80 border border-border/40 rounded px-1.5 py-0.5 text-[13px] font-mono">
+                        {children}
+                      </code>
+                    );
+                  },
+                  // Code block wrapper
+                  pre: ({ children }) => (
+                    <pre className="bg-background/80 border border-border/50 rounded-xl p-4 overflow-x-auto my-3 text-[13px] font-mono">
+                      {children}
+                    </pre>
+                  ),
+                  // Blockquote
+                  blockquote: ({ children }) => (
+                    <blockquote className="border-l-4 border-primary/40 pl-4 italic text-muted-foreground my-3">
+                      {children}
+                    </blockquote>
+                  ),
+                  // Horizontal rule
+                  hr: () => <hr className="border-border/40 my-4" />,
+                  // Tables
+                  table: ({ children }) => (
+                    <div className="overflow-x-auto my-3">
+                      <table className="w-full text-sm border-collapse">
+                        {children}
+                      </table>
+                    </div>
+                  ),
+                  thead: ({ children }) => (
+                    <thead className="bg-background/60">{children}</thead>
+                  ),
+                  th: ({ children }) => (
+                    <th className="border border-border/40 px-3 py-2 text-left font-semibold">
+                      {children}
+                    </th>
+                  ),
+                  td: ({ children }) => (
+                    <td className="border border-border/40 px-3 py-2">
+                      {children}
+                    </td>
+                  ),
+                  // Images
+                  img: (props) => (
+                    <EnlargeableImage
+                      src={props.src || ""}
+                      alt={props.alt || ""}
+                      className="max-w-full rounded-md border border-border/50 shadow-sm object-cover my-3"
+                    />
+                  ),
+                }}
+              >
+                {message.content}
+              </ReactMarkdown>
+              {/* Blinking cursor while this bubble is actively streaming */}
+              {isStreaming && (
+                <span
+                  aria-hidden
+                  style={{
+                    display: "inline-block",
+                    width: "2px",
+                    height: "1em",
+                    background: "currentColor",
+                    marginLeft: "2px",
+                    verticalAlign: "text-bottom",
+                    animation: "embediq-blink 0.9s step-start infinite",
+                  }}
+                />
+              )}
+              <style>{`
+              @keyframes embediq-blink {
+                0%, 100% { opacity: 1; }
+                50%       { opacity: 0; }
+              }
+            `}</style>
+            </>
           )}
         </div>
         {message.sources && message.sources.length > 0 && (
@@ -363,7 +462,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
                 .flatMap((s) => s.image_urls || [])
                 .filter((v, i, a) => a.indexOf(v) === i)
                 .map((url, i) => (
-                  <img
+                  <EnlargeableImage
                     key={i}
                     src={`http://localhost:8000${url}`}
                     alt="Source content"
@@ -425,5 +524,41 @@ function EmptyState({
         ))}
       </div>
     </div>
+  );
+}
+
+function EnlargeableImage({
+  src,
+  alt,
+  className,
+}: {
+  src: string;
+  alt?: string;
+  className?: string;
+}) {
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <img
+          src={src}
+          alt={alt || "Image"}
+          className={cn(
+            "cursor-pointer transition-opacity hover:opacity-90",
+            className,
+          )}
+        />
+      </DialogTrigger>
+      <DialogContent className="max-w-4xl border-none bg-transparent p-0 shadow-none">
+        <DialogTitle className="sr-only">Enlarged Image</DialogTitle>
+        <DialogDescription className="sr-only">
+          View full size image
+        </DialogDescription>
+        <img
+          src={src}
+          alt={alt || "Enlarged Image"}
+          className="h-auto w-full max-h-[85vh] object-contain rounded-md"
+        />
+      </DialogContent>
+    </Dialog>
   );
 }

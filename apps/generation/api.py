@@ -11,12 +11,13 @@ Authentication: JWT Bearer token required. All queries and sessions are
 scoped to the authenticated user.
 """
 from ninja import NinjaAPI, Schema
+from django.http import StreamingHttpResponse
 import logging
 
 logger = logging.getLogger(__name__)
 
-from apps.conversations.services import get_or_create_session, get_history, save_turn
-from apps.generation.services import ask
+from apps.conversations.services import get_or_create_session, get_history
+from apps.generation.services import ask_stream
 from apps.retrieval.api import router as document_router
 from apps.accounts.auth import jwt_auth
 
@@ -34,23 +35,24 @@ class QueryIn(Schema):
     session_id: str | None = None  # omit to start a new conversation
 
 
-class QueryOut(Schema):
-    answer: str
-    session_id: str  # always returned — pass it back to continue the thread
-    sources: list[dict] = []
-
-
-@api.post("/query", response=QueryOut, auth=jwt_auth, summary="Ask a question over your documents")
-def query_endpoint(request, payload: QueryIn) -> QueryOut:
+@api.post("/query", auth=jwt_auth, summary="Ask a question over your documents (SSE stream)")
+def query_endpoint(request, payload: QueryIn):
     """
-    Runs the full conversational RAG pipeline scoped to the authenticated user:
-    1. Load or create a conversation session (owned by this user)
+    Runs the full conversational RAG pipeline and streams the response as
+    Server-Sent Events (SSE). Clients receive three event types:
+
+      data: {"type": "sources", "sources": [...]}   — emitted first
+      data: {"type": "token",   "text": "..."}       — one per Gemini chunk
+      data: {"type": "done",    "session_id": "..."}  — final event
+
+    Pipeline steps (scoped to the authenticated user):
+    1. Load or create a conversation session
     2. Fetch the last MAX_HISTORY_TURNS messages as context
-    3. Rewrite the query using history (fixes vague follow-ups)
-    4. Embed the rewritten query → retrieve top-K chunks from Qdrant (user-scoped)
-    5. Build a multi-turn prompt (history + new context + question)
-    6. Generate the answer with Gemini
-    7. Persist both the user question and assistant answer to Postgres
+    3. Rewrite the query using history
+    4. Embed → retrieve top-K chunks from Qdrant (user-scoped)
+    5. Build multi-turn prompt
+    6. Stream answer tokens from Gemini
+    7. Persist both turns to Postgres after stream completes
     """
     user = request.auth
 
@@ -63,7 +65,7 @@ def query_endpoint(request, payload: QueryIn) -> QueryOut:
             request, {"detail": f"Question too long ({len(question)} chars, max 4000)."}, status=422
         )
 
-    logger.info("Received query for user: %s, session: %s", user.id, payload.session_id)
+    logger.info("Received streaming query for user: %s, session: %s", user.id, payload.session_id)
 
     # 1. Session (scoped to user)
     session = get_or_create_session(payload.session_id, user=user)
@@ -71,13 +73,19 @@ def query_endpoint(request, payload: QueryIn) -> QueryOut:
     # 2. History
     history = get_history(session)
 
-    # 3–6. Full conversational RAG (scoped to user's vectors)
-    answer, sources = ask(question, history=history, user_id=str(user.id))
+    # 3–7. Streaming RAG pipeline — yields SSE events
+    def event_stream():
+        yield from ask_stream(
+            query=question,
+            session=session,
+            history=history,
+            user_id=str(user.id),
+        )
 
-    # 7. Persist this exchange
-    save_turn(session, "user", question)
-    save_turn(session, "assistant", answer)
-
-    logger.info("Successfully generated answer for user: %s, session: %s", user.id, session.id)
-
-    return QueryOut(answer=answer, session_id=str(session.id), sources=sources)
+    response = StreamingHttpResponse(
+        event_stream(),
+        content_type="text/event-stream",
+    )
+    response["Cache-Control"] = "no-cache"
+    response["X-Accel-Buffering"] = "no"  # tell nginx not to buffer this response
+    return response

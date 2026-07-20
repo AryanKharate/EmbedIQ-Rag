@@ -90,10 +90,11 @@ export interface Source {
   image_urls?: string[];
 }
 
-export interface QueryResponse {
-  answer: string;
-  session_id: string;
-  sources?: Source[];
+export interface StreamCallbacks {
+  onSources: (sources: Source[]) => void;
+  onToken: (text: string) => void;
+  onDone: (session_id: string) => void;
+  onError?: (err: Error) => void;
 }
 
 export interface AuthUser {
@@ -186,12 +187,141 @@ export const documentsApi = {
 /* ───────── Chat / Query ───────── */
 
 export const chatApi = {
-  query: (
+  /**
+   * Send a question to the RAG backend and receive the answer as a
+   * Server-Sent Events stream. Fires callbacks as events arrive:
+   *   onSources → immediately, before any text
+   *   onToken   → per Gemini chunk (with a small smoothing delay)
+   *   onDone    → when the stream ends, carries session_id
+   *   onError   → on network / parse failure
+   */
+  queryStream: async (
     question: string,
-    session_id?: string | null,
-  ): Promise<QueryResponse> =>
-    request("/query", {
+    session_id: string | null | undefined,
+    callbacks: StreamCallbacks,
+  ): Promise<void> => {
+    const token = getAccessToken();
+
+    const makeHeaders = (t: string | null) => ({
+      "Content-Type": "application/json",
+      ...(t ? { Authorization: `Bearer ${t}` } : {}),
+    });
+
+    let res = await fetch(`${BASE}/query`, {
       method: "POST",
+      headers: makeHeaders(token),
       body: JSON.stringify({ question, session_id: session_id ?? null }),
-    }),
+    });
+
+    // Silent token refresh on 401
+    if (res.status === 401) {
+      const newToken = await refreshAccessToken();
+      if (newToken) {
+        res = await fetch(`${BASE}/query`, {
+          method: "POST",
+          headers: makeHeaders(newToken),
+          body: JSON.stringify({ question, session_id: session_id ?? null }),
+        });
+      } else {
+        logout();
+        callbacks.onError?.(new Error("Session expired. Please log in again."));
+        return;
+      }
+    }
+
+    if (!res.ok || !res.body) {
+      const text = await res.text().catch(() => "Unknown error");
+      callbacks.onError?.(new Error(`Query failed (${res.status}): ${text}`));
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    // Each character is queued individually so the delay creates true
+    // character-by-character rendering (like ChatGPT/Claude), regardless of
+    // how large each chunk Gemini sends is.
+    const CHAR_DELAY_MS = 5; // tune this: lower = faster, higher = slower
+    const charQueue: string[] = [];
+    let draining = false;
+
+    const drainQueue = () => {
+      if (draining || charQueue.length === 0) return;
+      draining = true;
+      const next = () => {
+        if (charQueue.length === 0) {
+          draining = false;
+          return;
+        }
+
+        // If the user switches tabs, browsers aggressively throttle setTimeout.
+        // To prevent the stream from freezing, flush the queue instantly.
+        if (
+          typeof document !== "undefined" &&
+          document.visibilityState === "hidden"
+        ) {
+          callbacks.onToken(charQueue.join(""));
+          charQueue.length = 0;
+          draining = false;
+          return;
+        }
+
+        callbacks.onToken(charQueue.shift()!);
+        setTimeout(next, CHAR_DELAY_MS);
+      };
+      setTimeout(next, CHAR_DELAY_MS);
+    };
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE events are separated by double newlines
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? ""; // keep any incomplete trailing chunk
+
+        for (const event of events) {
+          const line = event.trim();
+          if (!line.startsWith("data: ")) continue;
+
+          try {
+            const payload = JSON.parse(line.slice(6));
+
+            if (payload.type === "sources") {
+              callbacks.onSources(payload.sources ?? []);
+            } else if (payload.type === "token") {
+              // Explode the chunk into individual characters
+              for (const char of payload.text as string) {
+                charQueue.push(char);
+              }
+              drainQueue();
+            } else if (payload.type === "done") {
+              // Wait for all queued characters to drain before firing onDone
+              const waitForDrain = () =>
+                new Promise<void>((resolve) => {
+                  const check = () => {
+                    if (charQueue.length === 0 && !draining) {
+                      resolve();
+                    } else {
+                      setTimeout(check, CHAR_DELAY_MS * 2);
+                    }
+                  };
+                  check();
+                });
+              await waitForDrain();
+              callbacks.onDone(payload.session_id);
+            }
+          } catch {
+            // Non-JSON line — skip
+          }
+        }
+      }
+    } catch (err) {
+      callbacks.onError?.(err instanceof Error ? err : new Error(String(err)));
+    }
+  },
 };

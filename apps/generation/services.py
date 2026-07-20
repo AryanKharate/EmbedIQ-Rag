@@ -5,6 +5,7 @@ Prompt building + LLM generation with full multi-turn conversation support.
 Calls apps.retrieval.services for query rewriting and vector search so
 generation stays decoupled from Qdrant / embedding details.
 """
+import json
 import logging
 import time
 
@@ -181,3 +182,113 @@ def ask(
         return "I was unable to generate a response. Please try rephrasing your question.", sources
 
     return response.text, sources
+
+
+def ask_stream(
+    query: str,
+    session,
+    history: list[dict] | None = None,
+    model: str | None = None,
+    user_id: str | None = None,
+):
+    """
+    Streaming version of the full conversational RAG pipeline.
+    Yields SSE-formatted strings:
+      1. data: {"type": "sources", "sources": [...]}\n\n   (before any text)
+      2. data: {"type": "token",   "text": "..."}\n\n    (one per Gemini chunk)
+      3. data: {"type": "done",    "session_id": "..."}\n\n  (final event)
+
+    After the stream ends it saves both turns to Postgres (same as ask()).
+    """
+    from apps.conversations.services import save_turn
+
+    history = history or []
+    gen_model = model or settings.GEN_MODEL
+
+    # Step 1: context-aware query rewrite
+    t0 = time.time()
+    search_query = rewrite_query(query, history)
+    t_rewrite = time.time() - t0
+
+    # Step 2: retrieve relevant chunks
+    t0 = time.time()
+    if settings.CRAG_ENABLED:
+        from apps.retrieval.crag import corrective_retrieve
+        search_fn = search_and_rerank if settings.RERANKER_ENABLED else search_chunks
+
+        def _scoped_search(q, **kwargs):
+            return search_fn(q, user_id=user_id, **kwargs)
+
+        chunks, crag_status = corrective_retrieve(search_query, _scoped_search)
+        if crag_status == "insufficient":
+            msg = "I don't have enough relevant information in the knowledge base to answer that confidently."
+            yield f"data: {json.dumps({'type': 'sources', 'sources': []})}\n\n"
+            yield f"data: {json.dumps({'type': 'token', 'text': msg})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'session_id': str(session.id)})}\n\n"
+            save_turn(session, "user", query)
+            save_turn(session, "assistant", msg)
+            return
+    else:
+        if settings.RERANKER_ENABLED:
+            chunks = search_and_rerank(search_query, user_id=user_id)
+        else:
+            chunks = search_chunks(search_query, user_id=user_id)
+        crag_status = "ok"
+    t_retrieve = time.time() - t0
+
+    if not chunks:
+        msg = "No relevant chunks found in the collection."
+        yield f"data: {json.dumps({'type': 'sources', 'sources': []})}\n\n"
+        yield f"data: {json.dumps({'type': 'token', 'text': msg})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'session_id': str(session.id)})}\n\n"
+        save_turn(session, "user", query)
+        save_turn(session, "assistant", msg)
+        return
+
+    # Step 3: build multi-turn contents list
+    contents, sources = build_contents(query, chunks, history)
+
+    # Emit sources immediately so the frontend can show cards before text starts
+    yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
+
+    # Step 4: stream from Gemini
+    instruction = SYSTEM_INSTRUCTION
+    if crag_status == "corrected":
+        instruction += "\nNote: initial retrieval was weak; a corrected search was used."
+
+    t0 = time.time()
+    full_answer_parts: list[str] = []
+
+    try:
+        for chunk in _genai_client.models.generate_content_stream(
+            model=gen_model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=instruction,
+            ),
+        ):
+            if chunk.text:
+                full_answer_parts.append(chunk.text)
+                yield f"data: {json.dumps({'type': 'token', 'text': chunk.text})}\n\n"
+    except Exception as exc:
+        logger.error("Streaming generation error: %s", exc)
+        error_msg = "Streaming was interrupted. Please try again."
+        yield f"data: {json.dumps({'type': 'token', 'text': error_msg})}\n\n"
+        full_answer_parts.append(error_msg)
+
+    t_generate = time.time() - t0
+    logger.info(
+        "Stream pipeline timing: rewrite=%.2fs, retrieve=%.2fs, generate=%.2fs",
+        t_rewrite, t_retrieve, t_generate,
+    )
+
+    full_answer = "".join(full_answer_parts)
+    if not full_answer:
+        full_answer = "I was unable to generate a response. Please try rephrasing your question."
+
+    # Persist both turns to DB
+    save_turn(session, "user", query)
+    save_turn(session, "assistant", full_answer)
+
+    # Final done event carries the session_id the frontend needs for follow-ups
+    yield f"data: {json.dumps({'type': 'done', 'session_id': str(session.id)})}\n\n"
