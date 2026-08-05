@@ -1,4 +1,4 @@
 -r requirements.txt
-ruff
+ruff==0.15.21
 pytest
 pytest-django
