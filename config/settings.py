@@ -18,66 +18,66 @@ import dj_database_url
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-load_dotenv(BASE_DIR / '.env')
+load_dotenv(BASE_DIR / ".env")
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY gitWARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-q1q@8y@c#7qt48!t#%nxf&zz(118-grc98%*l)l%v@ck0bo4%-'
+SECRET_KEY = "django-insecure-q1q@8y@c#7qt48!t#%nxf&zz(118-grc98%*l)l%v@ck0bo4%-"
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = ["*"]
 
 
 # Application definition
 
 INSTALLED_APPS = [
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
-    'django.contrib.staticfiles',
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
     # EmbedIQ apps
-    'apps.retrieval.apps.RetrievalConfig',
-    'apps.generation',
-    'apps.conversations',
-    'apps.accounts',
+    "apps.retrieval.apps.RetrievalConfig",
+    "apps.generation",
+    "apps.conversations",
+    "apps.accounts",
 ]
 
 MIDDLEWARE = [
-    'django.middleware.security.SecurityMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'config.middleware.RequestTraceMiddleware',
+    "django.middleware.security.SecurityMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "config.middleware.RequestTraceMiddleware",
 ]
 
-ROOT_URLCONF = 'config.urls'
+ROOT_URLCONF = "config.urls"
 
 TEMPLATES = [
     {
-        'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
-        'APP_DIRS': True,
-        'OPTIONS': {
-            'context_processors': [
-                'django.template.context_processors.request',
-                'django.contrib.auth.context_processors.auth',
-                'django.contrib.messages.context_processors.messages',
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
             ],
         },
     },
 ]
 
-WSGI_APPLICATION = 'config.wsgi.application'
+WSGI_APPLICATION = "config.wsgi.application"
 
 
 # Database — Postgres via DATABASE_URL in .env
@@ -97,16 +97,16 @@ DATABASES = {
 
 AUTH_PASSWORD_VALIDATORS = [
     {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
     },
     {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
     },
 ]
 
@@ -114,9 +114,9 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = "UTC"
 
 USE_I18N = True
 
@@ -126,53 +126,54 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = "static/"
 
-MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
 
 # --- EmbedIQ shared config ---
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
-QDRANT_URL = os.environ.get('QDRANT_URL', 'http://localhost:6333')
-COLLECTION_NAME = os.environ.get('COLLECTION_NAME', 'my_docs')
-EMBED_DIM = int(os.environ.get('EMBED_DIM', 3072))
-TOP_K = int(os.environ.get('TOP_K', 5))
-GEN_MODEL = os.environ.get('GEN_MODEL', 'gemini-2.5-flash')
-MAX_HISTORY_TURNS = int(os.environ.get('MAX_HISTORY_TURNS', 10))
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
+COLLECTION_NAME = os.environ.get("COLLECTION_NAME", "my_docs")
+EMBED_DIM = int(os.environ.get("EMBED_DIM", 3072))
+TOP_K = int(os.environ.get("TOP_K", 5))
+GEN_MODEL = os.environ.get("GEN_MODEL", "gemini-2.5-flash")
+MAX_HISTORY_TURNS = int(os.environ.get("MAX_HISTORY_TURNS", 10))
 
 # --- Chunking config ---
 # Character-based sizes. Approx token equivalents (English):
 #   PARENT: 2500 chars ≈ 500–800 tokens (LLM context window)
 #   CHILD:  600 chars  ≈ 100–200 tokens (embedding granularity)
 # Children use ~10% overlap automatically (see ingest_service._chunk_text).
-PARENT_CHUNK_SIZE = int(os.environ.get('PARENT_CHUNK_SIZE', 2500))
-CHILD_CHUNK_SIZE = int(os.environ.get('CHILD_CHUNK_SIZE', 600))
+PARENT_CHUNK_SIZE = int(os.environ.get("PARENT_CHUNK_SIZE", 2500))
+CHILD_CHUNK_SIZE = int(os.environ.get("CHILD_CHUNK_SIZE", 600))
 
 # --- Reranker config ---
-RERANKER_ENABLED = os.environ.get('RERANKER_ENABLED', 'true').lower() == 'true'
-RERANKER_MODEL = os.environ.get('RERANKER_MODEL', 'BAAI/bge-reranker-base')
-RERANK_CANDIDATE_LIMIT = int(os.environ.get('RERANK_CANDIDATE_LIMIT', 25))
+RERANKER_ENABLED = os.environ.get("RERANKER_ENABLED", "true").lower() == "true"
+RERANKER_MODEL = os.environ.get("RERANKER_MODEL", "BAAI/bge-reranker-base")
+RERANK_CANDIDATE_LIMIT = int(os.environ.get("RERANK_CANDIDATE_LIMIT", 25))
 
 # --- HyDE config ---
-USE_HYDE = os.environ.get('USE_HYDE', 'false').lower() == 'true'
-HYDE_MODE = os.environ.get('HYDE_MODE', 'replace')
+USE_HYDE = os.environ.get("USE_HYDE", "false").lower() == "true"
+HYDE_MODE = os.environ.get("HYDE_MODE", "replace")
 
-_VALID_HYDE_MODES = {'replace', 'ensemble'}
+_VALID_HYDE_MODES = {"replace", "ensemble"}
 if HYDE_MODE not in _VALID_HYDE_MODES:
     from django.core.exceptions import ImproperlyConfigured
+
     raise ImproperlyConfigured(
         f"HYDE_MODE must be one of {_VALID_HYDE_MODES}, got {HYDE_MODE!r}"
     )
 
 # --- CRAG config ---
-CRAG_ENABLED = os.environ.get('CRAG_ENABLED', 'false').lower() == 'true'
-CRAG_CONFIDENCE_THRESHOLD = float(os.environ.get('CRAG_CONFIDENCE_THRESHOLD', '0.6'))
-CRAG_MIN_RELEVANT_CHUNKS = int(os.environ.get('CRAG_MIN_RELEVANT_CHUNKS', '2'))
+CRAG_ENABLED = os.environ.get("CRAG_ENABLED", "false").lower() == "true"
+CRAG_CONFIDENCE_THRESHOLD = float(os.environ.get("CRAG_CONFIDENCE_THRESHOLD", "0.6"))
+CRAG_MIN_RELEVANT_CHUNKS = int(os.environ.get("CRAG_MIN_RELEVANT_CHUNKS", "2"))
 
 # --- Table ingestion config ---
 # Max data rows per table chunk. The header row is repeated in every batch.
 # Prevents a single large table from exceeding the LLM context window.
-TABLE_ROW_BATCH_SIZE = int(os.environ.get('TABLE_ROW_BATCH_SIZE', 20))
+TABLE_ROW_BATCH_SIZE = int(os.environ.get("TABLE_ROW_BATCH_SIZE", 20))
 
 # --- Authentication & JWT ---
 from datetime import timedelta  # noqa: E402
@@ -187,49 +188,49 @@ SIMPLE_JWT = {
 }
 
 # Google OAuth2 client ID — set this in .env
-GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 
 # --- Logging config ---
-os.makedirs(BASE_DIR / 'logs', exist_ok=True)
+os.makedirs(BASE_DIR / "logs", exist_ok=True)
 
 LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'filters': {
-        'trace_id': {
-            '()': 'config.middleware.TraceIdFilter',
+    "version": 1,
+    "disable_existing_loggers": False,
+    "filters": {
+        "trace_id": {
+            "()": "config.middleware.TraceIdFilter",
         },
     },
-    'formatters': {
-        'verbose': {
-            'format': '[{asctime}] {levelname} [{name}:{lineno}] [trace:{trace_id}] {message}',
-            'style': '{',
+    "formatters": {
+        "verbose": {
+            "format": "[{asctime}] {levelname} [{name}:{lineno}] [trace:{trace_id}] {message}",
+            "style": "{",
         },
     },
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-            'formatter': 'verbose',
-            'filters': ['trace_id'],
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+            "filters": ["trace_id"],
         },
-        'file': {
-            'class': 'logging.handlers.RotatingFileHandler',
-            'filename': BASE_DIR / 'logs' / 'embediq.log',
-            'maxBytes': 1024 * 1024 * 5,  # 5 MB
-            'backupCount': 5,
-            'formatter': 'verbose',
-            'filters': ['trace_id'],
+        "file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": BASE_DIR / "logs" / "embediq.log",
+            "maxBytes": 1024 * 1024 * 5,  # 5 MB
+            "backupCount": 5,
+            "formatter": "verbose",
+            "filters": ["trace_id"],
         },
     },
-    'root': {
-        'handlers': ['console', 'file'],
-        'level': 'INFO',
+    "root": {
+        "handlers": ["console", "file"],
+        "level": "INFO",
     },
-    'loggers': {
-        'django': {
-            'handlers': ['console', 'file'],
-            'level': 'INFO',
-            'propagate': False,
+    "loggers": {
+        "django": {
+            "handlers": ["console", "file"],
+            "level": "INFO",
+            "propagate": False,
         },
     },
 }

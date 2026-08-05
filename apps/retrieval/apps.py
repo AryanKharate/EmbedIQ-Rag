@@ -14,4 +14,5 @@ class RetrievalConfig(AppConfig):
             # Import the singleton and trigger model load so the
             # first incoming request doesn't pay the download/load penalty.
             from .reranker import reranker
+
             reranker._load()

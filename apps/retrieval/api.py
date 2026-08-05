@@ -1,17 +1,19 @@
 import uuid
 import logging
 
-logger = logging.getLogger(__name__)
 from ninja import Router, Schema, File
 from ninja.files import UploadedFile
 from django.shortcuts import get_object_or_404
+from django.conf import settings
+
+from qdrant_client import QdrantClient
+from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 from .models import Document
 from .ingest_service import ingest_document
-from qdrant_client import QdrantClient
-from django.conf import settings
-from qdrant_client.models import Filter, FieldCondition, MatchValue
 from apps.accounts.auth import jwt_auth
+
+logger = logging.getLogger(__name__)
 
 router = Router(tags=["Documents"])
 
@@ -29,7 +31,12 @@ class DocumentStatusUpdate(Schema):
     is_active: bool
 
 
-@router.get("/", response=list[DocumentSchema], auth=jwt_auth, summary="List all ingested documents")
+@router.get(
+    "/",
+    response=list[DocumentSchema],
+    auth=jwt_auth,
+    summary="List all ingested documents",
+)
 def list_documents(request):
     """Returns all documents owned by the authenticated user."""
     user = request.auth
@@ -47,7 +54,12 @@ def list_documents(request):
     ]
 
 
-@router.post("/upload", response=DocumentSchema, auth=jwt_auth, summary="Upload and ingest a document (.txt, .pdf, or .md)")
+@router.post(
+    "/upload",
+    response=DocumentSchema,
+    auth=jwt_auth,
+    summary="Upload and ingest a document (.txt, .pdf, or .md)",
+)
 def upload_document(request, file: UploadedFile = File(...)):
     """
     Ingests a document directly via API.
@@ -67,14 +79,24 @@ def upload_document(request, file: UploadedFile = File(...)):
     }
 
 
-@router.patch("/{doc_id}/toggle", response=DocumentSchema, auth=jwt_auth, summary="Toggle document active status")
+@router.patch(
+    "/{doc_id}/toggle",
+    response=DocumentSchema,
+    auth=jwt_auth,
+    summary="Toggle document active status",
+)
 def toggle_document(request, doc_id: uuid.UUID, payload: DocumentStatusUpdate):
     """
     Sets a document as active or inactive.
     Only the owning user can toggle their own documents.
     """
     user = request.auth
-    logger.info("Toggling document %s active status to %s (user=%s)", doc_id, payload.is_active, user.id)
+    logger.info(
+        "Toggling document %s active status to %s (user=%s)",
+        doc_id,
+        payload.is_active,
+        user.id,
+    )
     doc = get_object_or_404(Document, id=doc_id, owner=user)
     doc.is_active = payload.is_active
     doc.save()
@@ -84,7 +106,9 @@ def toggle_document(request, doc_id: uuid.UUID, payload: DocumentStatusUpdate):
         collection_name=settings.COLLECTION_NAME,
         payload={"is_active": doc.is_active},
         points=Filter(
-            must=[FieldCondition(key="document_id", match=MatchValue(value=str(doc.id)))]
+            must=[
+                FieldCondition(key="document_id", match=MatchValue(value=str(doc.id)))
+            ]
         ),
     )
 
@@ -112,8 +136,10 @@ def delete_document(request, doc_id: uuid.UUID):
     _qdrant_client.delete(
         collection_name=settings.COLLECTION_NAME,
         points_selector=Filter(
-            must=[FieldCondition(key="document_id", match=MatchValue(value=str(doc.id)))]
-        )
+            must=[
+                FieldCondition(key="document_id", match=MatchValue(value=str(doc.id)))
+            ]
+        ),
     )
 
     # Delete from Postgres

@@ -6,6 +6,7 @@ Two Django models that persist multi-turn conversation history in Postgres:
   ConversationSession  — one row per chat thread (keyed by UUID)
   ConversationTurn     — one row per message (user or assistant)
 """
+
 import uuid
 
 from django.contrib.auth.models import User
@@ -20,7 +21,7 @@ class ConversationSession(models.Model):
         User,
         on_delete=models.CASCADE,
         related_name="sessions",
-        null=True,   # nullable for safe migration of existing sessions
+        null=True,  # nullable for safe migration of existing sessions
         blank=True,
     )
     created_at = models.DateTimeField(auto_now_add=True)

@@ -13,13 +13,14 @@ Usage:
     python manage.py ingest doc1.txt
     python manage.py ingest doc1.txt doc2.txt --chunk-size 800
 """
+
 from pathlib import Path
 import logging
 
-logger = logging.getLogger(__name__)
-
 from django.core.management.base import BaseCommand, CommandError
 from apps.retrieval.ingest_service import ingest_document
+
+logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
@@ -49,12 +50,14 @@ class Command(BaseCommand):
             self.stdout.write(f"Ingesting {file_path} ...")
             logger.info(f"Ingesting {file_path} ...")
             file_bytes = file_path.read_bytes()
-            
+
             doc = ingest_document(
                 filename=file_path.name,
                 file_bytes=file_bytes,
             )
-            self.stdout.write(self.style.SUCCESS(f"  Upserted {doc.filename} (ID: {doc.id})"))
+            self.stdout.write(
+                self.style.SUCCESS(f"  Upserted {doc.filename} (ID: {doc.id})")
+            )
             logger.info(f"Upserted {doc.filename} (ID: {doc.id})")
 
         self.stdout.write(self.style.SUCCESS("Done."))

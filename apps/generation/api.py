@@ -10,16 +10,18 @@ Omit session_id (or pass null) to start a fresh session.
 Authentication: JWT Bearer token required. All queries and sessions are
 scoped to the authenticated user.
 """
-from ninja import NinjaAPI, Schema
-from django.http import StreamingHttpResponse
+
 import logging
 
-logger = logging.getLogger(__name__)
+from ninja import NinjaAPI, Schema
+from django.http import StreamingHttpResponse
 
 from apps.conversations.services import get_or_create_session, get_history
 from apps.generation.services import ask_stream
 from apps.retrieval.api import router as document_router
 from apps.accounts.auth import jwt_auth
+
+logger = logging.getLogger(__name__)
 
 api = NinjaAPI(
     title="EmbedIQ API",
@@ -35,7 +37,9 @@ class QueryIn(Schema):
     session_id: str | None = None  # omit to start a new conversation
 
 
-@api.post("/query", auth=jwt_auth, summary="Ask a question over your documents (SSE stream)")
+@api.post(
+    "/query", auth=jwt_auth, summary="Ask a question over your documents (SSE stream)"
+)
 def query_endpoint(request, payload: QueryIn):
     """
     Runs the full conversational RAG pipeline and streams the response as
@@ -59,13 +63,21 @@ def query_endpoint(request, payload: QueryIn):
     # --- Input validation ---
     question = (payload.question or "").strip()
     if not question:
-        return api.create_response(request, {"detail": "Question must not be empty."}, status=422)
+        return api.create_response(
+            request, {"detail": "Question must not be empty."}, status=422
+        )
     if len(question) > 4000:
         return api.create_response(
-            request, {"detail": f"Question too long ({len(question)} chars, max 4000)."}, status=422
+            request,
+            {"detail": f"Question too long ({len(question)} chars, max 4000)."},
+            status=422,
         )
 
-    logger.info("Received streaming query for user: %s, session: %s", user.id, payload.session_id)
+    logger.info(
+        "Received streaming query for user: %s, session: %s",
+        user.id,
+        payload.session_id,
+    )
 
     # 1. Session (scoped to user)
     session = get_or_create_session(payload.session_id, user=user)

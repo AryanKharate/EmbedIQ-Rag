@@ -77,7 +77,9 @@ def grade_all_concurrent(query: str, chunk_texts: list[str]) -> list[RelevanceGr
             try:
                 results[idx] = future.result()
             except Exception:
-                logger.exception("CRAG grading failed for chunk %d, treating as not relevant", idx)
+                logger.exception(
+                    "CRAG grading failed for chunk %d, treating as not relevant", idx
+                )
                 results[idx] = RelevanceGrade(relevant=False, confidence=0.0)
 
     return results  # type: ignore[return-value]
@@ -151,7 +153,8 @@ def corrective_retrieve(query: str, search_fn) -> tuple[list, str]:
     grades = grade_all_concurrent(query, deduped_texts)
 
     relevant_chunks = [
-        c for c, g in zip(deduped_chunks, grades)
+        c
+        for c, g in zip(deduped_chunks, grades)
         if g.relevant and g.confidence >= threshold
     ]
 
@@ -168,7 +171,8 @@ def corrective_retrieve(query: str, search_fn) -> tuple[list, str]:
     retry_grades = grade_all_concurrent(query, retry_texts)
 
     retry_relevant = [
-        c for c, g in zip(retry_deduped, retry_grades)
+        c
+        for c, g in zip(retry_deduped, retry_grades)
         if g.relevant and g.confidence >= threshold
     ]
 

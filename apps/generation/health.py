@@ -6,6 +6,7 @@ Health check endpoints for container orchestration and load balancers.
   /health/live   — always returns 200 (process is alive)
   /health/ready  — returns 200 if Postgres + Qdrant are reachable, 503 otherwise
 """
+
 import logging
 
 from django.conf import settings

@@ -5,6 +5,7 @@ Prompt building + LLM generation with full multi-turn conversation support.
 Calls apps.retrieval.services for query rewriting and vector search so
 generation stays decoupled from Qdrant / embedding details.
 """
+
 import json
 import logging
 import time
@@ -41,43 +42,47 @@ def build_contents(query: str, chunks: list, history: list[dict]) -> list[dict]:
     seen_texts = set()
     context_chunks = []
     sources = []
-    
+
     from apps.retrieval.models import DocumentImage
-    
+
     for c in chunks:
         # Prefer parent_text (for new chunks), fallback to text (for old chunks)
         chunk_text = c.payload.get("parent_text") or c.payload.get("text")
         source = c.payload.get("source", "unknown")
-        
+
         # Deduplicate to prevent stuffing the exact same parent context multiple times
         if chunk_text not in seen_texts:
             seen_texts.add(chunk_text)
-            context_chunks.append(
-                f"[Source: {source}]\n{chunk_text}"
-            )
-            
+            context_chunks.append(f"[Source: {source}]\n{chunk_text}")
+
             # Fetch images for this document and page
             doc_id = c.payload.get("document_id")
             page_num = c.payload.get("page_number")
             image_urls = []
             if doc_id and page_num:
-                images = DocumentImage.objects.filter(document_id=doc_id, page_number=page_num)
+                images = DocumentImage.objects.filter(
+                    document_id=doc_id, page_number=page_num
+                )
                 image_urls = [img.image.url for img in images if img.image]
 
-            sources.append({
-                "source": source,
-                "chunk_index": c.payload.get("chunk_index"),
-                "parent_id": c.payload.get("parent_id"),
-                "score": getattr(c, "score", None),
-                "image_urls": image_urls,
-            })
-            
+            sources.append(
+                {
+                    "source": source,
+                    "chunk_index": c.payload.get("chunk_index"),
+                    "parent_id": c.payload.get("parent_id"),
+                    "score": getattr(c, "score", None),
+                    "image_urls": image_urls,
+                }
+            )
+
     context_text = "\n\n---\n\n".join(context_chunks)
 
-    contents.append({
-        "role": "user",
-        "parts": [{"text": f"Context:\n{context_text}\n\nQuestion: {query}"}],
-    })
+    contents.append(
+        {
+            "role": "user",
+            "parts": [{"text": f"Context:\n{context_text}\n\nQuestion: {query}"}],
+        }
+    )
     return contents, sources
 
 
@@ -119,10 +124,13 @@ def ask(
     t0 = time.time()
     if settings.CRAG_ENABLED:
         from apps.retrieval.crag import corrective_retrieve
+
         search_fn = search_and_rerank if settings.RERANKER_ENABLED else search_chunks
+
         # Wrap search_fn to pass user_id
         def _scoped_search(q, **kwargs):
             return search_fn(q, user_id=user_id, **kwargs)
+
         chunks, crag_status = corrective_retrieve(search_query, _scoped_search)
 
         if crag_status == "insufficient":
@@ -144,7 +152,9 @@ def ask(
     # Step 4: generate with system instruction passed via config
     instruction = SYSTEM_INSTRUCTION
     if crag_status == "corrected":
-        instruction += "\nNote: initial retrieval was weak; a corrected search was used."
+        instruction += (
+            "\nNote: initial retrieval was weak; a corrected search was used."
+        )
 
     t0 = time.time()
     response = _genai_client.models.generate_content(
@@ -159,7 +169,9 @@ def ask(
     # Log stage timing for performance diagnostics
     logger.info(
         "Pipeline timing: rewrite=%.2fs, retrieve=%.2fs, generate=%.2fs",
-        t_rewrite, t_retrieve, t_generate,
+        t_rewrite,
+        t_retrieve,
+        t_generate,
     )
 
     # Log token usage if available
@@ -176,10 +188,18 @@ def ask(
     if response.text is None or response.text.strip() == "":
         # Check if the response was blocked by safety filters
         if hasattr(response, "prompt_feedback") and response.prompt_feedback:
-            logger.warning("Response blocked by safety filters: %s", response.prompt_feedback)
-            return "I'm unable to answer that question due to content safety restrictions.", sources
+            logger.warning(
+                "Response blocked by safety filters: %s", response.prompt_feedback
+            )
+            return (
+                "I'm unable to answer that question due to content safety restrictions.",
+                sources,
+            )
         logger.warning("Model returned empty response for query: %s...", query[:50])
-        return "I was unable to generate a response. Please try rephrasing your question.", sources
+        return (
+            "I was unable to generate a response. Please try rephrasing your question.",
+            sources,
+        )
 
     return response.text, sources
 
@@ -214,6 +234,7 @@ def ask_stream(
     t0 = time.time()
     if settings.CRAG_ENABLED:
         from apps.retrieval.crag import corrective_retrieve
+
         search_fn = search_and_rerank if settings.RERANKER_ENABLED else search_chunks
 
         def _scoped_search(q, **kwargs):
@@ -254,7 +275,9 @@ def ask_stream(
     # Step 4: stream from Gemini
     instruction = SYSTEM_INSTRUCTION
     if crag_status == "corrected":
-        instruction += "\nNote: initial retrieval was weak; a corrected search was used."
+        instruction += (
+            "\nNote: initial retrieval was weak; a corrected search was used."
+        )
 
     t0 = time.time()
     full_answer_parts: list[str] = []
@@ -279,12 +302,16 @@ def ask_stream(
     t_generate = time.time() - t0
     logger.info(
         "Stream pipeline timing: rewrite=%.2fs, retrieve=%.2fs, generate=%.2fs",
-        t_rewrite, t_retrieve, t_generate,
+        t_rewrite,
+        t_retrieve,
+        t_generate,
     )
 
     full_answer = "".join(full_answer_parts)
     if not full_answer:
-        full_answer = "I was unable to generate a response. Please try rephrasing your question."
+        full_answer = (
+            "I was unable to generate a response. Please try rephrasing your question."
+        )
 
     # Persist both turns to DB
     save_turn(session, "user", query)

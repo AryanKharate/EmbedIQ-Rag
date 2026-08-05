@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """
 squad_eval.py
 
@@ -31,6 +32,7 @@ from collections import Counter
 # ── Django setup — must happen before importing any app modules ──
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 import django
+
 django.setup()
 
 from django.conf import settings
@@ -73,6 +75,7 @@ RANDOM_SEED = 42
 # 1. Dataset loading
 # ────────────────────────────────────────────────────────────────────────────
 
+
 def load_squad_sample(n_samples: int) -> list[dict]:
     """
     Load a balanced, reproducibly-random sample from SQuAD 2.0 validation split.
@@ -94,13 +97,16 @@ def load_squad_sample(n_samples: int) -> list[dict]:
 
     ans_count = sum(1 for s in sampled if s["answers"]["text"])
     unans_count = len(sampled) - ans_count
-    print(f"  Sampled {ans_count} answerable + {unans_count} unanswerable = {len(sampled)} total examples.")
+    print(
+        f"  Sampled {ans_count} answerable + {unans_count} unanswerable = {len(sampled)} total examples."
+    )
     return sampled
 
 
 # ────────────────────────────────────────────────────────────────────────────
 # 2. Qdrant collection setup & ingestion (using production path)
 # ────────────────────────────────────────────────────────────────────────────
+
 
 def setup_eval_collection(qdrant_client: QdrantClient) -> None:
     """Drop and recreate a fresh squad_eval collection with dense + sparse schema."""
@@ -113,9 +119,7 @@ def setup_eval_collection(qdrant_client: QdrantClient) -> None:
         vectors_config={
             "dense": VectorParams(size=EMBED_DIM, distance=Distance.COSINE)
         },
-        sparse_vectors_config={
-            "sparse": SparseVectorParams(modifier=Modifier.IDF)
-        },
+        sparse_vectors_config={"sparse": SparseVectorParams(modifier=Modifier.IDF)},
     )
     print(f"  Created '{EVAL_COLLECTION}' with dense + sparse schema.")
 
@@ -145,6 +149,7 @@ def ingest_contexts_production(contexts: list[tuple[str, str]]) -> None:
 # ────────────────────────────────────────────────────────────────────────────
 # 3. Metrics: EM, Token F1, Recall@k, LLM Judge
 # ────────────────────────────────────────────────────────────────────────────
+
 
 def _normalize_answer(s: str) -> str:
     """Normalize answer for EM/F1: lowercase, remove punctuation/articles/extra whitespace."""
@@ -219,7 +224,9 @@ def recall_at_k(query: str, gold_source_id: str, k: int = 5) -> float:
         return 0.0
 
 
-def llm_judge(genai_client: genai.Client, question: str, prediction: str, gold_answers: list[str]) -> int:
+def llm_judge(
+    genai_client: genai.Client, question: str, prediction: str, gold_answers: list[str]
+) -> int:
     """
     Uses a SEPARATE Gemini model (not the generator) to judge if the
     prediction is semantically correct. Returns 1 for correct, 0 for incorrect.
@@ -255,6 +262,7 @@ def llm_judge(genai_client: genai.Client, question: str, prediction: str, gold_a
 # ────────────────────────────────────────────────────────────────────────────
 # 4. Main evaluation loop
 # ────────────────────────────────────────────────────────────────────────────
+
 
 def run_evaluation(n_samples: int, keep_collection: bool) -> None:
     # ── Load dataset ──────────────────────────────────────────────
@@ -335,26 +343,30 @@ def run_evaluation(n_samples: int, keep_collection: bool) -> None:
         print(f"[{i:02d}/{len(examples)}] [{label}] {status} ({elapsed:.1f}s)")
         print(f"  Q:    {question}")
         print(f"  Gold: {gold_display}")
-        print(f"  Pred: {prediction[:250].strip()}{'...' if len(prediction) > 250 else ''}")
+        print(
+            f"  Pred: {prediction[:250].strip()}{'...' if len(prediction) > 250 else ''}"
+        )
         if is_answerable:
             print(f"  EM: {em_score:.0f}  F1: {f1_score:.3f}  Recall@k: {r_at_k:.0f}")
         else:
             print(f"  Recall@k: {r_at_k:.0f}")
         print()
 
-        results.append({
-            "id": ex["id"],
-            "title": ex["title"],
-            "question": question,
-            "gold_answers": gold_answers,
-            "prediction": prediction,
-            "is_answerable": is_answerable,
-            "is_correct": bool(is_correct),
-            "exact_match": em_score,
-            "token_f1": f1_score,
-            "recall_at_k": r_at_k,
-            "time_seconds": round(elapsed, 2),
-        })
+        results.append(
+            {
+                "id": ex["id"],
+                "title": ex["title"],
+                "question": question,
+                "gold_answers": gold_answers,
+                "prediction": prediction,
+                "is_answerable": is_answerable,
+                "is_correct": bool(is_correct),
+                "exact_match": em_score,
+                "token_f1": f1_score,
+                "recall_at_k": r_at_k,
+                "time_seconds": round(elapsed, 2),
+            }
+        )
 
     # ── Final report ─────────────────────────────────────────────
     n = len(examples)
@@ -373,13 +385,17 @@ def run_evaluation(n_samples: int, keep_collection: bool) -> None:
     print(f"  OVERALL LLM-Judge Acc    :  {overall_acc_pct:.1f}%")
     print(f"  {'─' * 56}")
     if ans_n:
-        print(f"  Answerable Accuracy      :  {100*ans_correct/ans_n:.1f}%  (n={ans_n})")
-        print(f"  Exact Match (EM)         :  {100*total_em/ans_n:.1f}%")
-        print(f"  Token F1                 :  {100*total_f1/ans_n:.1f}%")
+        print(
+            f"  Answerable Accuracy      :  {100 * ans_correct / ans_n:.1f}%  (n={ans_n})"
+        )
+        print(f"  Exact Match (EM)         :  {100 * total_em / ans_n:.1f}%")
+        print(f"  Token F1                 :  {100 * total_f1 / ans_n:.1f}%")
     if unans_n:
-        print(f"  Unanswerable Accuracy    :  {100*unans_correct/unans_n:.1f}%  (n={unans_n})")
+        print(
+            f"  Unanswerable Accuracy    :  {100 * unans_correct / unans_n:.1f}%  (n={unans_n})"
+        )
     print(f"  {'─' * 56}")
-    print(f"  Retrieval Recall@{settings.TOP_K}       :  {100*total_recall/n:.1f}%")
+    print(f"  Retrieval Recall@{settings.TOP_K}       :  {100 * total_recall / n:.1f}%")
     print(f"  {'─' * 56}")
     print(f"  Latency  mean            :  {avg_time:.2f}s")
     print(f"  Latency  p50             :  {p50:.2f}s")
@@ -400,7 +416,9 @@ def run_evaluation(n_samples: int, keep_collection: bool) -> None:
             },
             "unanswerable": {
                 "count": unans_n,
-                "accuracy_pct": round(100 * unans_correct / unans_n, 2) if unans_n else 0,
+                "accuracy_pct": round(100 * unans_correct / unans_n, 2)
+                if unans_n
+                else 0,
             },
             "retrieval": {
                 "recall_at_k": round(100 * total_recall / n, 2),
@@ -422,7 +440,9 @@ def run_evaluation(n_samples: int, keep_collection: bool) -> None:
     # ── Cleanup ──────────────────────────────────────────────────
     if not keep_collection:
         qdrant_client.delete_collection(EVAL_COLLECTION)
-        print(f"  Deleted '{EVAL_COLLECTION}' collection. (use --keep-collection to retain it)")
+        print(
+            f"  Deleted '{EVAL_COLLECTION}' collection. (use --keep-collection to retain it)"
+        )
     else:
         print(f"  Kept '{EVAL_COLLECTION}' collection for debugging.")
 

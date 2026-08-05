@@ -10,6 +10,7 @@ the load at startup so the first request never pays the model-load penalty.
 Input:  list of ScoredPoint objects (as returned by search_chunks)
 Output: same ScoredPoints, re-sorted by reranker score, truncated to top_k
 """
+
 import logging
 import threading
 
@@ -36,11 +37,14 @@ class _Reranker:
             if self._model is not None:
                 return
             from FlagEmbedding import FlagReranker
+
             model_name = settings.RERANKER_MODEL
             use_fp16 = torch.cuda.is_available()
             logger.info(
                 "Loading BGE reranker: %s (fp16=%s, device=%s)",
-                model_name, use_fp16, "cuda" if use_fp16 else "cpu",
+                model_name,
+                use_fp16,
+                "cuda" if use_fp16 else "cpu",
             )
             self._model = FlagReranker(model_name, use_fp16=use_fp16)
             logger.info("BGE reranker ready.")

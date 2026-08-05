@@ -5,6 +5,7 @@ Custom Ninja HttpBearer authenticator using djangorestframework-simplejwt.
 Validates the JWT in the Authorization header and returns the User object,
 which becomes `request.auth` in every protected endpoint.
 """
+
 import logging
 
 from django.contrib.auth.models import User
@@ -31,7 +32,9 @@ class JWTAuth(HttpBearer):
             logger.debug("JWT validation failed: %s", e)
             return None
         except User.DoesNotExist:
-            logger.warning("JWT references non-existent user_id=%s", validated.get("user_id"))
+            logger.warning(
+                "JWT references non-existent user_id=%s", validated.get("user_id")
+            )
             return None
         except Exception as e:
             logger.error("Unexpected auth error: %s", e)

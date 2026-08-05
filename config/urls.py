@@ -14,6 +14,7 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
+
 from django.contrib import admin
 from django.urls import path
 from django.conf import settings
@@ -26,12 +27,11 @@ from apps.accounts.api import router as auth_router
 api.add_router("/auth", auth_router)
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
-    path('api/', api.urls),
-    path('health/live', liveness, name='health-live'),
-    path('health/ready', readiness, name='health-ready'),
+    path("admin/", admin.site.urls),
+    path("api/", api.urls),
+    path("health/live", liveness, name="health-live"),
+    path("health/ready", readiness, name="health-ready"),
 ]
 
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-

@@ -3,6 +3,7 @@ apps/accounts/schemas.py
 
 Pydantic/Ninja schemas for all authentication endpoints.
 """
+
 from ninja import Schema
 
 
@@ -19,6 +20,7 @@ class LoginIn(Schema):
 
 class GoogleAuthIn(Schema):
     """Client sends the Google ID token obtained from the Google Sign-In popup."""
+
     id_token: str
 
 

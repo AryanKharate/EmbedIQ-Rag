@@ -7,6 +7,7 @@ request can be correlated.
 
 The trace ID is also returned as an X-Request-ID response header.
 """
+
 import logging
 import threading
 import uuid

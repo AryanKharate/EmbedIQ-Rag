@@ -11,6 +11,7 @@ v3 Changes:
   - Added embed_sparse() using FastEmbed BM25 (in-process, no extra server)
   - Qdrant prefetch + server-side RRF fusion (dense + sparse in one round-trip)
 """
+
 import logging
 import re
 
@@ -53,9 +54,7 @@ def embed_query(text: str) -> list[float]:
         raise ValueError("Embedding API returned no embeddings")
     vec = result.embeddings[0].values
     if len(vec) != settings.EMBED_DIM:
-        raise ValueError(
-            f"Expected embedding dim {settings.EMBED_DIM}, got {len(vec)}"
-        )
+        raise ValueError(f"Expected embedding dim {settings.EMBED_DIM}, got {len(vec)}")
     return vec
 
 
@@ -82,6 +81,7 @@ def get_dense_query_vector(query: str) -> list[float]:
         return embed_query(query)
 
     from .hyde import generate_hypothetical_answer
+
     hypothetical = generate_hypothetical_answer(query)
     hyde_vec = embed_query(hypothetical)
 
@@ -93,7 +93,9 @@ def get_dense_query_vector(query: str) -> list[float]:
     return [(a + b) / 2 for a, b in zip(raw_vec, hyde_vec)]
 
 
-def search_chunks(query: str, top_k: int | None = None, user_id: str | None = None) -> list:
+def search_chunks(
+    query: str, top_k: int | None = None, user_id: str | None = None
+) -> list:
     """
     Hybrid search: dense (semantic) + sparse (BM25 keyword) with RRF fusion.
 
@@ -120,15 +122,27 @@ def search_chunks(query: str, top_k: int | None = None, user_id: str | None = No
 
     must_conditions = [FieldCondition(key="is_active", match=MatchValue(value=True))]
     if user_id:
-        must_conditions.append(FieldCondition(key="user_id", match=MatchValue(value=user_id)))
+        must_conditions.append(
+            FieldCondition(key="user_id", match=MatchValue(value=user_id))
+        )
 
     query_filter = Filter(must=must_conditions)
 
     hits = _qdrant_client.query_points(
         collection_name=settings.COLLECTION_NAME,
         prefetch=[
-            Prefetch(query=sparse_vec, using="sparse", limit=prefetch_limit, filter=query_filter),
-            Prefetch(query=dense_vec, using="dense", limit=prefetch_limit, filter=query_filter),
+            Prefetch(
+                query=sparse_vec,
+                using="sparse",
+                limit=prefetch_limit,
+                filter=query_filter,
+            ),
+            Prefetch(
+                query=dense_vec,
+                using="dense",
+                limit=prefetch_limit,
+                filter=query_filter,
+            ),
         ],
         query=FusionQuery(fusion=Fusion.RRF),
         query_filter=query_filter,
@@ -149,7 +163,9 @@ def search_chunks(query: str, top_k: int | None = None, user_id: str | None = No
     return deduped_hits
 
 
-def search_and_rerank(query: str, top_k: int | None = None, user_id: str | None = None) -> list:
+def search_and_rerank(
+    query: str, top_k: int | None = None, user_id: str | None = None
+) -> list:
     """
     Full retrieval pipeline with cross-encoder reranking.
 
@@ -169,7 +185,9 @@ def search_and_rerank(query: str, top_k: int | None = None, user_id: str | None 
     """
     from .reranker import reranker
 
-    candidates = search_chunks(query, top_k=settings.RERANK_CANDIDATE_LIMIT, user_id=user_id)
+    candidates = search_chunks(
+        query, top_k=settings.RERANK_CANDIDATE_LIMIT, user_id=user_id
+    )
     reranked = reranker.rerank(query, candidates, top_k=settings.RERANK_CANDIDATE_LIMIT)
 
     # We deduplicate again just in case the reranker reordered things such that
@@ -222,14 +240,15 @@ def rewrite_query(original_question: str, history: list[dict]) -> str:
 
     # Skip LLM rewrite if the question looks self-contained
     if not _looks_referential(original_question):
-        logger.debug("Skipping rewrite — question looks self-contained: %s...", original_question[:50])
+        logger.debug(
+            "Skipping rewrite — question looks self-contained: %s...",
+            original_question[:50],
+        )
         return original_question
 
     # Use up to the last 6 turns (3 exchanges) to keep the rewriting prompt small
     recent = history[-6:]
-    formatted = "\n".join(
-        f"{t['role'].capitalize()}: {t['content']}" for t in recent
-    )
+    formatted = "\n".join(f"{t['role'].capitalize()}: {t['content']}" for t in recent)
     prompt = (
         "Given the conversation below and a follow-up question, rewrite the "
         "follow-up as a fully standalone question that captures all necessary context. "

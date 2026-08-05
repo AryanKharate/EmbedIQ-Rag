@@ -6,20 +6,34 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('retrieval', '0001_initial'),
+        ("retrieval", "0001_initial"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='DocumentImage',
+            name="DocumentImage",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('page_number', models.IntegerField()),
-                ('image', models.ImageField(upload_to='document_images/')),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('document', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='images', to='retrieval.document')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("page_number", models.IntegerField()),
+                ("image", models.ImageField(upload_to="document_images/")),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                (
+                    "document",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="images",
+                        to="retrieval.document",
+                    ),
+                ),
             ],
         ),
     ]

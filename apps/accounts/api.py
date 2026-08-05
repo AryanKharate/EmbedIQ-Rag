@@ -10,6 +10,7 @@ Endpoints:
   POST /api/auth/google    — verify Google ID token, create/get user, return JWTs
   GET  /api/auth/me        — return current authenticated user info
 """
+
 import logging
 
 from django.conf import settings
@@ -56,6 +57,7 @@ def _user_out(user: User, is_new: bool = False) -> dict:
 
 # ─── Register ────────────────────────────────────────────────────────────────
 
+
 @router.post("/register", response=TokenWithUserOut, summary="Register a new account")
 def register(request, payload: RegisterIn):
     """Create a new user with email + password and return JWT tokens."""
@@ -81,6 +83,7 @@ def register(request, payload: RegisterIn):
 
 # ─── Login ───────────────────────────────────────────────────────────────────
 
+
 @router.post("/login", response=TokenWithUserOut, summary="Login with email + password")
 def login(request, payload: LoginIn):
     """Authenticate with email + password and return JWT tokens."""
@@ -95,11 +98,13 @@ def login(request, payload: LoginIn):
 
 # ─── Refresh ─────────────────────────────────────────────────────────────────
 
+
 @router.post("/refresh", response=AccessOut, summary="Refresh access token")
 def refresh_token(request, payload: RefreshIn):
     """Exchange a valid refresh token for a new access token."""
     from rest_framework_simplejwt.tokens import RefreshToken as RT
     from rest_framework_simplejwt.exceptions import TokenError
+
     try:
         token = RT(payload.refresh)
         return {"access": str(token.access_token)}
@@ -108,6 +113,7 @@ def refresh_token(request, payload: RefreshIn):
 
 
 # ─── Google OAuth ─────────────────────────────────────────────────────────────
+
 
 @router.post("/google", response=TokenWithUserOut, summary="Sign in with Google")
 def google_auth(request, payload: GoogleAuthIn):
@@ -157,6 +163,7 @@ def google_auth(request, payload: GoogleAuthIn):
 
 
 # ─── Me ──────────────────────────────────────────────────────────────────────
+
 
 @router.get("/me", response=UserOut, auth=jwt_auth, summary="Get current user")
 def me(request):

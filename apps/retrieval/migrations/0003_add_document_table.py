@@ -6,21 +6,45 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('retrieval', '0002_documentimage'),
+        ("retrieval", "0002_documentimage"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='DocumentTable',
+            name="DocumentTable",
             fields=[
-                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('page_number', models.IntegerField()),
-                ('row_count', models.IntegerField(help_text='Number of data rows in this batch (excluding header).')),
-                ('markdown', models.TextField(help_text='Full GitHub-flavoured Markdown representation of the table batch.')),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('document', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='tables', to='retrieval.document')),
+                (
+                    "id",
+                    models.UUIDField(
+                        default=uuid.uuid4,
+                        editable=False,
+                        primary_key=True,
+                        serialize=False,
+                    ),
+                ),
+                ("page_number", models.IntegerField()),
+                (
+                    "row_count",
+                    models.IntegerField(
+                        help_text="Number of data rows in this batch (excluding header)."
+                    ),
+                ),
+                (
+                    "markdown",
+                    models.TextField(
+                        help_text="Full GitHub-flavoured Markdown representation of the table batch."
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                (
+                    "document",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="tables",
+                        to="retrieval.document",
+                    ),
+                ),
             ],
         ),
     ]

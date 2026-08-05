@@ -53,9 +53,7 @@ def ensure_collection() -> None:
                     distance=Distance.COSINE,
                 )
             },
-            sparse_vectors_config={
-                "sparse": SparseVectorParams(modifier=Modifier.IDF)
-            },
+            sparse_vectors_config={"sparse": SparseVectorParams(modifier=Modifier.IDF)},
         )
 
 
@@ -92,14 +90,18 @@ def _chunk_text(text: str, chunk_size: int, overlap: int = 0) -> list[str]:
                         if current_chunk:
                             chunks.append(current_chunk)
                             if overlap > 0:
-                                current_chunk = current_chunk[-overlap:].strip() + " " + sentence
+                                current_chunk = (
+                                    current_chunk[-overlap:].strip() + " " + sentence
+                                )
                                 current_chunk = current_chunk.strip()
                             else:
                                 current_chunk = sentence
                         else:
                             current_chunk = sentence
             else:
-                current_chunk = (current_chunk + "\n\n" + para).strip() if current_chunk else para
+                current_chunk = (
+                    (current_chunk + "\n\n" + para).strip() if current_chunk else para
+                )
 
     if current_chunk:
         chunks.append(current_chunk)
@@ -162,8 +164,10 @@ def _validate_upload(filename: str, file_bytes: bytes) -> None:
 # Table helpers
 # ---------------------------------------------------------------------------
 
+
 def _rows_to_markdown(header: list, rows: list[list]) -> str:
     """Serialize a table (header + data rows) to a GitHub-flavoured Markdown string."""
+
     def fmt(row: list) -> str:
         return "| " + " | ".join(str(c or "").strip() for c in row) + " |"
 
@@ -191,10 +195,7 @@ def _split_rows_into_batches(
     """
     if not rows:
         return [(header, [])]
-    return [
-        (header, rows[i : i + batch_size])
-        for i in range(0, len(rows), batch_size)
-    ]
+    return [(header, rows[i : i + batch_size]) for i in range(0, len(rows), batch_size)]
 
 
 def _extract_tables_from_page(page) -> list[dict]:
@@ -216,7 +217,9 @@ def _extract_tables_from_page(page) -> list[dict]:
     try:
         table_finder = page.find_tables()
     except Exception as exc:
-        logger.warning("find_tables() failed — skipping table extraction for page: %s", exc)
+        logger.warning(
+            "find_tables() failed — skipping table extraction for page: %s", exc
+        )
         return []
 
     for table in table_finder:
@@ -233,15 +236,19 @@ def _extract_tables_from_page(page) -> list[dict]:
         header = data[0]
         rows = data[1:]
 
-        for batch_header, batch_rows in _split_rows_into_batches(header, rows, row_batch_size):
+        for batch_header, batch_rows in _split_rows_into_batches(
+            header, rows, row_batch_size
+        ):
             md = _rows_to_markdown(batch_header, batch_rows)
             csv_str = _rows_to_csv(batch_header, batch_rows)
-            tables_out.append({
-                "markdown": md,
-                "csv": csv_str,
-                "row_count": len(batch_rows),
-                "bbox": table.bbox,  # used to mask table regions from raw text
-            })
+            tables_out.append(
+                {
+                    "markdown": md,
+                    "csv": csv_str,
+                    "row_count": len(batch_rows),
+                    "bbox": table.bbox,  # used to mask table regions from raw text
+                }
+            )
 
     return tables_out
 
@@ -274,9 +281,7 @@ def _split_text_and_md_tables(text: str) -> list[dict]:
         # Re-parse the markdown table to produce a CSV representation
         lines = [ln for ln in table_text.splitlines() if ln.strip().startswith("|")]
         # Filter out the separator line (|---|---|)
-        data_lines = [
-            ln for ln in lines if not re.match(r"^\|[-|: \t]+\|", ln.strip())
-        ]
+        data_lines = [ln for ln in lines if not re.match(r"^\|[-|: \t]+\|", ln.strip())]
         parsed_rows = [
             [cell.strip() for cell in ln.strip().strip("|").split("|")]
             for ln in data_lines
@@ -285,12 +290,14 @@ def _split_text_and_md_tables(text: str) -> list[dict]:
         data_rows = parsed_rows[1:] if len(parsed_rows) > 1 else []
         csv_str = _rows_to_csv(header, data_rows) if header else ""
 
-        segments.append({
-            "type": "table",
-            "content": table_text,
-            "csv": csv_str,
-            "row_count": len(data_rows),
-        })
+        segments.append(
+            {
+                "type": "table",
+                "content": table_text,
+                "csv": csv_str,
+                "row_count": len(data_rows),
+            }
+        )
         last_end = match.end()
 
     # Any remaining plain text after the last table
@@ -304,6 +311,7 @@ def _split_text_and_md_tables(text: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Extraction
 # ---------------------------------------------------------------------------
+
 
 def extract_text_from_bytes(db_doc: Document, file_bytes: bytes) -> list[dict]:
     """
@@ -319,7 +327,6 @@ def extract_text_from_bytes(db_doc: Document, file_bytes: bytes) -> list[dict]:
     if db_doc.filename.lower().endswith(".pdf"):
         with fitz.open(stream=file_bytes, filetype="pdf") as doc:
             for page_num, page in enumerate(doc, start=1):
-
                 # ── Table extraction ─────────────────────────────────────────
                 table_dicts = _extract_tables_from_page(page)
                 table_bboxes = [fitz.Rect(t["bbox"]) for t in table_dicts]
@@ -346,12 +353,20 @@ def extract_text_from_bytes(db_doc: Document, file_bytes: bytes) -> list[dict]:
                     try:
                         image_bytes = pix.tobytes("png")
                     except Exception as exc:
-                        logger.warning("Failed to save image xref %d directly: %s. Converting to RGB.", xref, exc)
+                        logger.warning(
+                            "Failed to save image xref %d directly: %s. Converting to RGB.",
+                            xref,
+                            exc,
+                        )
                         try:
                             pix_rgb = fitz.Pixmap(fitz.csRGB, pix)
                             image_bytes = pix_rgb.tobytes("png")
                         except Exception as inner_exc:
-                            logger.error("Failed to convert image xref %d to RGB: %s", xref, inner_exc)
+                            logger.error(
+                                "Failed to convert image xref %d to RGB: %s",
+                                xref,
+                                inner_exc,
+                            )
                             continue
                     image_filename = f"{db_doc.filename}_p{page_num}_i{img_index}.png"
                     doc_img = DocumentImage(document=db_doc, page_number=page_num)
@@ -367,11 +382,13 @@ def extract_text_from_bytes(db_doc: Document, file_bytes: bytes) -> list[dict]:
                         markdown=tbl["markdown"],
                     )
 
-                pages_data.append({
-                    "page_number": page_num,
-                    "text": text,
-                    "tables": table_dicts,
-                })
+                pages_data.append(
+                    {
+                        "page_number": page_num,
+                        "text": text,
+                        "tables": table_dicts,
+                    }
+                )
 
     else:
         # .txt / .md — use regex-based Markdown table detection
@@ -379,9 +396,7 @@ def extract_text_from_bytes(db_doc: Document, file_bytes: bytes) -> list[dict]:
         segments = _split_text_and_md_tables(raw_text)
 
         # Rejoin plain-text segments (tables are handled separately)
-        text_only = "\n\n".join(
-            s["content"] for s in segments if s["type"] == "text"
-        )
+        text_only = "\n\n".join(s["content"] for s in segments if s["type"] == "text")
         tables = [
             {
                 "markdown": s["content"],
@@ -411,9 +426,10 @@ def extract_text_from_bytes(db_doc: Document, file_bytes: bytes) -> list[dict]:
 # Main ingest entry point
 # ---------------------------------------------------------------------------
 
+
 def ingest_document(filename: str, file_bytes: bytes, owner=None) -> Document:
     """Parse, chunk, embed, and upsert a document into Qdrant, and save to Postgres.
-    
+
     Args:
         filename: Original filename of the document.
         file_bytes: Raw bytes of the document.
@@ -438,23 +454,27 @@ def ingest_document(filename: str, file_bytes: bytes, owner=None) -> Document:
         # Text chunks
         p_chunks = _chunk_text(page_data["text"], settings.PARENT_CHUNK_SIZE)
         for c in p_chunks:
-            parent_chunks_with_metadata.append({
-                "page_number": page_data["page_number"],
-                "text": c,
-                "chunk_type": "text",
-                "table_row_count": None,
-                "table_csv": None,
-            })
+            parent_chunks_with_metadata.append(
+                {
+                    "page_number": page_data["page_number"],
+                    "text": c,
+                    "chunk_type": "text",
+                    "table_row_count": None,
+                    "table_csv": None,
+                }
+            )
 
         # Table chunks — each markdown batch is already a bounded parent
         for tbl in page_data.get("tables", []):
-            parent_chunks_with_metadata.append({
-                "page_number": page_data["page_number"],
-                "text": tbl["markdown"],
-                "chunk_type": "table",
-                "table_row_count": tbl["row_count"],
-                "table_csv": tbl.get("csv") or None,
-            })
+            parent_chunks_with_metadata.append(
+                {
+                    "page_number": page_data["page_number"],
+                    "text": tbl["markdown"],
+                    "chunk_type": "table",
+                    "table_row_count": tbl["row_count"],
+                    "table_csv": tbl.get("csv") or None,
+                }
+            )
 
     if not parent_chunks_with_metadata:
         return db_doc
@@ -471,14 +491,16 @@ def ingest_document(filename: str, file_bytes: bytes, owner=None) -> Document:
         )
         for child in children:
             child_chunks_flat.append(child)
-            child_meta.append({
-                "parent_text": parent_obj["text"],
-                "parent_idx": parent_idx,
-                "page_number": parent_obj["page_number"],
-                "chunk_type": parent_obj["chunk_type"],
-                "table_row_count": parent_obj["table_row_count"],
-                "table_csv": parent_obj["table_csv"],
-            })
+            child_meta.append(
+                {
+                    "parent_text": parent_obj["text"],
+                    "parent_idx": parent_idx,
+                    "page_number": parent_obj["page_number"],
+                    "chunk_type": parent_obj["chunk_type"],
+                    "table_row_count": parent_obj["table_row_count"],
+                    "table_csv": parent_obj["table_csv"],
+                }
+            )
 
     # ── 3. Embed dense (children only) ─────────────────────────────────────
     dense_vectors = _embed_dense_batch(child_chunks_flat)
