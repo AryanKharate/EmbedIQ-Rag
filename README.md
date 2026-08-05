@@ -84,7 +84,7 @@ Once the containers are running, the application will be available at:
 
 ---
 
-## 📚 Usage Guide
+## 📚 Usage Guide 
 
 ### Ingesting Documents
 To feed knowledge into the vector database, use the custom Django management command. Open a new terminal and run the command inside the running `web` container:

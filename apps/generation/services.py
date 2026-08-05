@@ -49,15 +49,15 @@ def build_contents(query: str, chunks: list, history: list[dict]) -> list[dict]:
         # Prefer parent_text (for new chunks), fallback to text (for old chunks)
         chunk_text = c.payload.get("parent_text") or c.payload.get("text")
         source = c.payload.get("source", "unknown")
+        page_num = c.payload.get("page_number")
 
         # Deduplicate to prevent stuffing the exact same parent context multiple times
         if chunk_text not in seen_texts:
             seen_texts.add(chunk_text)
-            context_chunks.append(f"[Source: {source}]\n{chunk_text}")
+            context_chunks.append(f"[Source: {source}, Page: {page_num}]\n{chunk_text}")
 
             # Fetch images for this document and page
             doc_id = c.payload.get("document_id")
-            page_num = c.payload.get("page_number")
             image_urls = []
             if doc_id and page_num:
                 images = DocumentImage.objects.filter(
@@ -72,6 +72,7 @@ def build_contents(query: str, chunks: list, history: list[dict]) -> list[dict]:
                     "parent_id": c.payload.get("parent_id"),
                     "score": getattr(c, "score", None),
                     "image_urls": image_urls,
+                    "page_number": page_num,
                 }
             )
 
@@ -93,6 +94,7 @@ SYSTEM_INSTRUCTION = (
     "you MUST refuse to answer and state '(no answer exists)'. "
     "Do NOT use outside knowledge. Do NOT attempt to guess, extrapolate, or deduce the answer if the information is missing. "
     "Never fabricate information. "
+    "When providing facts or information from the context, you MUST include in-line citations in the format (Source: <source>, Page: <page_number>). "
     "You may reference previous conversation turns to give coherent answers."
 )
 
