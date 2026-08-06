@@ -88,6 +88,7 @@ export interface Source {
   parent_id?: string;
   score?: number;
   image_urls?: string[];
+  page_number?: number | string;
 }
 
 export interface StreamCallbacks {

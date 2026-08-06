@@ -457,6 +457,30 @@ function MessageBubble({
             <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
               Sources & Images
             </h4>
+
+            {/* Text Sources */}
+            <div className="flex flex-wrap gap-2 mb-1">
+              {Array.from(
+                new Map(
+                  message.sources.map((s) => [
+                    `${s.source}-${s.page_number}`,
+                    s,
+                  ]),
+                ).values(),
+              ).map((s, i) => (
+                <span
+                  key={i}
+                  className="inline-flex items-center rounded-md bg-secondary px-2 py-1 text-xs font-medium text-secondary-foreground ring-1 ring-inset ring-secondary-foreground/10"
+                >
+                  {s.source}{" "}
+                  {s.page_number && s.page_number !== "Unknown"
+                    ? `(Page ${s.page_number})`
+                    : ""}
+                </span>
+              ))}
+            </div>
+
+            {/* Images */}
             <div className="flex flex-wrap gap-2">
               {message.sources
                 .flatMap((s) => s.image_urls || [])
