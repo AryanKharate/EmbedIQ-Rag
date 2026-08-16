@@ -16,9 +16,11 @@ Usage:
 
 from pathlib import Path
 import logging
+import uuid
 
 from django.core.management.base import BaseCommand, CommandError
 from apps.retrieval.ingest_service import ingest_document
+from config.timing import stage, trace_id_var
 
 logger = logging.getLogger(__name__)
 
@@ -40,25 +42,30 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         files: list[Path] = options["files"]
 
-        logger.info(f"Starting ingestion process for files: {[str(f) for f in files]}")
+        # No middleware on the CLI path, so set a trace ID here — it correlates
+        # every stage line this run emits.
+        trace_id_var.set(f"cli-{uuid.uuid4().hex[:8]}")
+
+        logger.info("Starting ingestion process for files: %s", [str(f) for f in files])
 
         for file_path in files:
             if not file_path.exists():
-                logger.error(f"File not found: {file_path}")
+                logger.error("File not found: %s", file_path)
                 raise CommandError(f"File not found: {file_path}")
 
             self.stdout.write(f"Ingesting {file_path} ...")
-            logger.info(f"Ingesting {file_path} ...")
+            logger.info("Ingesting %s ...", file_path)
             file_bytes = file_path.read_bytes()
 
-            doc = ingest_document(
-                filename=file_path.name,
-                file_bytes=file_bytes,
-            )
+            with stage("cli_ingest", file=file_path.name):
+                doc = ingest_document(
+                    filename=file_path.name,
+                    file_bytes=file_bytes,
+                )
             self.stdout.write(
                 self.style.SUCCESS(f"  Upserted {doc.filename} (ID: {doc.id})")
             )
-            logger.info(f"Upserted {doc.filename} (ID: {doc.id})")
+            logger.info("Upserted %s (ID: %s)", doc.filename, doc.id)
 
         self.stdout.write(self.style.SUCCESS("Done."))
         logger.info("Ingestion process completed successfully.")

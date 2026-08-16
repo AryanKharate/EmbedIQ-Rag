@@ -24,13 +24,26 @@ load_dotenv(BASE_DIR / ".env")
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
-# SECURITY gitWARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-q1q@8y@c#7qt48!t#%nxf&zz(118-grc98%*l)l%v@ck0bo4%-"
+# SECURITY WARNING: keep the secret key used in production secret!
+# No hardcoded fallback — a committed key (even one labeled "dev-only") is
+# still a secret checked into source control. Generate one with:
+#   python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
+# and put it in .env (gitignored) as DJANGO_SECRET_KEY=...
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
+if not SECRET_KEY:
+    from django.core.exceptions import ImproperlyConfigured
+
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY is not set. Add it to your .env file."
+    )
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get("DEBUG", "true").lower() == "true"
 
-ALLOWED_HOSTS = ["*"]
+# Comma-separated in .env, e.g. ALLOWED_HOSTS=api.example.com,example.com
+ALLOWED_HOSTS = [
+    h.strip() for h in os.environ.get("ALLOWED_HOSTS", "*").split(",") if h.strip()
+]
 
 
 # Application definition
@@ -58,6 +71,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "config.middleware.RequestTraceMiddleware",
+    "config.middleware.RequestTimingMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -137,7 +151,10 @@ QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 COLLECTION_NAME = os.environ.get("COLLECTION_NAME", "my_docs")
 EMBED_DIM = int(os.environ.get("EMBED_DIM", 3072))
 TOP_K = int(os.environ.get("TOP_K", 5))
-GEN_MODEL = os.environ.get("GEN_MODEL", "gemini-2.5-flash")
+GEN_MODEL = os.environ.get("GEN_MODEL", "gemini-3.5-flash-lite")
+# Fast/cheap model used for query rewriting, HyDE, and CRAG grading/rewriting —
+# distinct from GEN_MODEL, which produces the user-facing answer.
+UTILITY_MODEL = os.environ.get("UTILITY_MODEL", "gemini-3.5-flash-lite")
 MAX_HISTORY_TURNS = int(os.environ.get("MAX_HISTORY_TURNS", 10))
 
 # --- Chunking config ---
@@ -175,6 +192,21 @@ CRAG_MIN_RELEVANT_CHUNKS = int(os.environ.get("CRAG_MIN_RELEVANT_CHUNKS", "2"))
 # Prevents a single large table from exceeding the LLM context window.
 TABLE_ROW_BATCH_SIZE = int(os.environ.get("TABLE_ROW_BATCH_SIZE", 20))
 
+# --- Upload / ingestion limits ---
+ALLOWED_UPLOAD_EXTENSIONS = set(
+    e.strip().lower()
+    for e in os.environ.get("ALLOWED_UPLOAD_EXTENSIONS", ".txt,.pdf,.md").split(",")
+    if e.strip()
+)
+MAX_UPLOAD_SIZE_BYTES = int(
+    os.environ.get("MAX_UPLOAD_SIZE_MB", 50)
+) * 1024 * 1024
+QDRANT_UPSERT_BATCH_SIZE = int(os.environ.get("QDRANT_UPSERT_BATCH_SIZE", 200))
+
+# --- CRAG grading concurrency ---
+# Max concurrent grading threads per corrective_retrieve() call.
+CRAG_MAX_GRADE_WORKERS = int(os.environ.get("CRAG_MAX_GRADE_WORKERS", 4))
+
 # --- Authentication & JWT ---
 from datetime import timedelta  # noqa: E402
 
@@ -189,6 +221,18 @@ SIMPLE_JWT = {
 
 # Google OAuth2 client ID — set this in .env
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+
+# --- Timing instrumentation ---
+# Turns off every stage()/request timing log without touching call sites.
+TIMING_ENABLED = os.environ.get("TIMING_ENABLED", "true").lower() == "true"
+# Requests slower than this are logged at WARNING instead of INFO.
+SLOW_REQUEST_MS = int(os.environ.get("SLOW_REQUEST_MS", 3000))
+# Path prefixes excluded from request timing — health checks would flood the log.
+TIMING_SKIP_PATHS = tuple(
+    p.strip()
+    for p in os.environ.get("TIMING_SKIP_PATHS", "/health/").split(",")
+    if p.strip()
+)
 
 # --- Logging config ---
 os.makedirs(BASE_DIR / "logs", exist_ok=True)
@@ -221,6 +265,16 @@ LOGGING = {
             "formatter": "verbose",
             "filters": ["trace_id"],
         },
+        # Timing events also get their own file so they can be grepped/parsed
+        # without the surrounding application log noise.
+        "timing_file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": BASE_DIR / "logs" / "timing.log",
+            "maxBytes": 1024 * 1024 * 5,  # 5 MB
+            "backupCount": 5,
+            "formatter": "verbose",
+            "filters": ["trace_id"],
+        },
     },
     "root": {
         "handlers": ["console", "file"],
@@ -229,6 +283,12 @@ LOGGING = {
     "loggers": {
         "django": {
             "handlers": ["console", "file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        # propagate=False so timing lines aren't emitted twice via root.
+        "embediq.timing": {
+            "handlers": ["console", "file", "timing_file"],
             "level": "INFO",
             "propagate": False,
         },

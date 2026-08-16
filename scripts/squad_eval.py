@@ -43,17 +43,12 @@ settings.COLLECTION_NAME = "squad_eval"
 
 from datasets import load_dataset
 from google import genai
-from qdrant_client import QdrantClient
-from qdrant_client.models import (
-    Distance,
-    Modifier,
-    SparseVectorParams,
-    VectorParams,
-)
 
 # Import our existing RAG services (now pointed at squad_eval collection)
 from apps.generation.services import ask
+from apps.retrieval import vector_store
 from apps.retrieval.ingest_service import ingest_document
+from apps.retrieval.models import Document
 from apps.retrieval.services import search_chunks
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -61,10 +56,9 @@ from apps.retrieval.services import search_chunks
 # ────────────────────────────────────────────────────────────────────────────
 
 EVAL_COLLECTION = "squad_eval"
-EMBED_DIM = settings.EMBED_DIM
 
 # Use a DIFFERENT model than the generator for LLM-as-judge to reduce
-# self-serving bias (generator uses gemini-2.5-flash)
+# self-serving bias (generator uses gemini-3.5-flash-lite)
 JUDGE_MODEL = "gemini-3.1-flash-lite"
 
 # Random seed for reproducible sampling
@@ -108,42 +102,41 @@ def load_squad_sample(n_samples: int) -> list[dict]:
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def setup_eval_collection(qdrant_client: QdrantClient) -> None:
+def setup_eval_collection() -> None:
     """Drop and recreate a fresh squad_eval collection with dense + sparse schema."""
-    if qdrant_client.collection_exists(EVAL_COLLECTION):
-        print(f"  Dropping existing '{EVAL_COLLECTION}' collection...")
-        qdrant_client.delete_collection(EVAL_COLLECTION)
-
-    qdrant_client.create_collection(
-        collection_name=EVAL_COLLECTION,
-        vectors_config={
-            "dense": VectorParams(size=EMBED_DIM, distance=Distance.COSINE)
-        },
-        sparse_vectors_config={"sparse": SparseVectorParams(modifier=Modifier.IDF)},
-    )
+    print(f"  (Re)creating '{EVAL_COLLECTION}' collection...")
+    vector_store.recreate_collection(EVAL_COLLECTION)
     print(f"  Created '{EVAL_COLLECTION}' with dense + sparse schema.")
 
 
-def ingest_contexts_production(contexts: list[tuple[str, str]]) -> None:
+def ingest_contexts_production(contexts: list[tuple[str, str]]) -> list:
     """
     Ingest unique (source_id, passage_text) tuples using the PRODUCTION
     ingestion pipeline. This tests the real chunking, parent-child logic,
     embedding batching, and Qdrant upsert path.
+
+    Returns the created Document rows so the caller can clean them up from
+    Postgres afterward — this pipeline writes to the SAME database as the
+    running app, not an isolated eval DB, only the Qdrant collection is.
     """
     if not contexts:
-        return
+        return []
 
+    created_docs = []
     for source_id, text in contexts:
         # Convert text to bytes and use the production ingest path
         file_bytes = text.encode("utf-8")
         filename = f"{source_id}.txt"
         try:
-            ingest_document(filename=filename, file_bytes=file_bytes)
+            created_docs.append(
+                ingest_document(filename=filename, file_bytes=file_bytes)
+            )
         except Exception as e:
             print(f"  WARNING: Failed to ingest context {source_id}: {e}")
             continue
 
     print(f"  Ingested {len(contexts)} context passages via production pipeline.")
+    return created_docs
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -269,12 +262,11 @@ def run_evaluation(n_samples: int, keep_collection: bool) -> None:
     examples = load_squad_sample(n_samples)
 
     # ── Init clients ─────────────────────────────────────────────
-    qdrant_client = QdrantClient(url=settings.QDRANT_URL)
     genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
     # ── Setup collection ─────────────────────────────────────────
     print("\nSetting up isolated eval collection...")
-    setup_eval_collection(qdrant_client)
+    setup_eval_collection()
 
     # ── Deduplicate and ingest contexts via production pipeline ───
     print("\nIngesting context passages via production pipeline...")
@@ -286,7 +278,7 @@ def run_evaluation(n_samples: int, keep_collection: bool) -> None:
 
     unique_contexts = list(seen.values())
     print(f"  {len(unique_contexts)} unique passages from {len(examples)} examples.")
-    ingest_contexts_production(unique_contexts)
+    created_docs = ingest_contexts_production(unique_contexts)
 
     # ── Evaluate ─────────────────────────────────────────────────
     print(f"\nRunning evaluation on {len(examples)} questions...\n" + "─" * 80)
@@ -439,12 +431,22 @@ def run_evaluation(n_samples: int, keep_collection: bool) -> None:
 
     # ── Cleanup ──────────────────────────────────────────────────
     if not keep_collection:
-        qdrant_client.delete_collection(EVAL_COLLECTION)
+        vector_store.delete_collection(EVAL_COLLECTION)
         print(
             f"  Deleted '{EVAL_COLLECTION}' collection. (use --keep-collection to retain it)"
         )
+
+        # ingest_document() writes to the SAME Postgres database the running
+        # app uses (not an isolated eval DB) — clean up the Document rows
+        # (and their cascade-deleted DocumentTable/DocumentImage rows) so
+        # every eval run doesn't permanently pollute production data.
+        doc_ids = [d.id for d in created_docs if d is not None]
+        if doc_ids:
+            Document.objects.filter(id__in=doc_ids).delete()
+            print(f"  Deleted {len(doc_ids)} eval Document rows from Postgres.")
     else:
         print(f"  Kept '{EVAL_COLLECTION}' collection for debugging.")
+        print(f"  Kept {len(created_docs)} eval Document rows in Postgres.")
 
 
 # ────────────────────────────────────────────────────────────────────────────

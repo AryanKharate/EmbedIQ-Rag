@@ -2,22 +2,21 @@ import uuid
 import logging
 
 from ninja import Router, Schema, File
+from ninja.errors import HttpError
 from ninja.files import UploadedFile
 from django.shortcuts import get_object_or_404
-from django.conf import settings
-
-from qdrant_client import QdrantClient
-from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 from .models import Document
-from .ingest_service import ingest_document
+from .ingest_service import (
+    delete_document_vectors,
+    ingest_document,
+    set_document_active,
+)
 from apps.accounts.auth import jwt_auth
 
 logger = logging.getLogger(__name__)
 
 router = Router(tags=["Documents"])
-
-_qdrant_client = QdrantClient(url=settings.QDRANT_URL)
 
 
 class DocumentSchema(Schema):
@@ -69,7 +68,13 @@ def upload_document(request, file: UploadedFile = File(...)):
     user = request.auth
     logger.info("Starting upload for document: %s (user=%s)", file.name, user.id)
     file_bytes = file.read()
-    doc = ingest_document(filename=file.name, file_bytes=file_bytes, owner=user)
+    try:
+        doc = ingest_document(filename=file.name, file_bytes=file_bytes, owner=user)
+    except ValueError as e:
+        # Raised by _validate_upload() for a bad extension or oversized file.
+        raise HttpError(400, str(e))
+    except UnicodeDecodeError:
+        raise HttpError(400, "File is not valid UTF-8 text.")
     logger.info("Successfully uploaded and ingested document: %s", doc.id)
     return {
         "id": doc.id,
@@ -101,16 +106,7 @@ def toggle_document(request, doc_id: uuid.UUID, payload: DocumentStatusUpdate):
     doc.is_active = payload.is_active
     doc.save()
 
-    # Update Qdrant payload to match
-    _qdrant_client.set_payload(
-        collection_name=settings.COLLECTION_NAME,
-        payload={"is_active": doc.is_active},
-        points=Filter(
-            must=[
-                FieldCondition(key="document_id", match=MatchValue(value=str(doc.id)))
-            ]
-        ),
-    )
+    set_document_active(doc.id, doc.is_active)
 
     logger.info("Successfully toggled document %s", doc_id)
 
@@ -132,15 +128,7 @@ def delete_document(request, doc_id: uuid.UUID):
     logger.info("Deleting document %s (user=%s)", doc_id, user.id)
     doc = get_object_or_404(Document, id=doc_id, owner=user)
 
-    # Delete from Qdrant
-    _qdrant_client.delete(
-        collection_name=settings.COLLECTION_NAME,
-        points_selector=Filter(
-            must=[
-                FieldCondition(key="document_id", match=MatchValue(value=str(doc.id)))
-            ]
-        ),
-    )
+    delete_document_vectors(doc.id)
 
     # Delete from Postgres
     doc.delete()

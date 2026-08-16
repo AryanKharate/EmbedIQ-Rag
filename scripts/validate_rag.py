@@ -1,8 +1,30 @@
-import requests
+"""
+scripts/validate_rag.py
+
+Manual smoke-test script: fires a fixed list of questions at a running
+/api/query endpoint and saves the answers for a human to eyeball.
+
+Not a substitute for scripts/squad_eval.py (which scores accuracy/recall
+against a labeled dataset) — this is for a quick "does the app still answer
+sensibly" check after a change, e.g.:
+
+    docker compose exec web python scripts/validate_rag.py
+
+Requires a running stack with at least one document ingested.
+"""
+
 import json
 import time
 
-API_URL = "http://localhost:8000/api/query"
+import requests
+
+BASE_URL = "http://localhost:8000"
+API_URL = f"{BASE_URL}/api/query"
+
+# A disposable local account used only to obtain a JWT for this script.
+# Registration is skipped (409) on every run after the first.
+VALIDATION_EMAIL = "validate-rag@local.test"
+VALIDATION_PASSWORD = "validate-rag-smoke-test-only"
 
 QUESTIONS = [
     "What is the role of DNS in internet communication?",
@@ -28,24 +50,70 @@ QUESTIONS = [
 ]
 
 
+def get_access_token() -> str:
+    """
+    Log in with a disposable local account, registering it first if it
+    doesn't exist yet. /api/query requires a JWT bearer token.
+    """
+    login = requests.post(
+        f"{BASE_URL}/api/auth/login",
+        json={"email": VALIDATION_EMAIL, "password": VALIDATION_PASSWORD},
+    )
+    if login.ok:
+        return login.json()["access"]
+
+    register = requests.post(
+        f"{BASE_URL}/api/auth/register",
+        json={
+            "email": VALIDATION_EMAIL,
+            "password": VALIDATION_PASSWORD,
+            "display_name": "RAG Validation",
+        },
+    )
+    register.raise_for_status()
+    return register.json()["access"]
+
+
+def ask(question: str, token: str) -> str:
+    """
+    POST a question and consume the SSE stream, returning the concatenated
+    answer text. /api/query streams three event types:
+      sources -> token* -> done  (see apps/generation/api.py)
+    """
+    response = requests.post(
+        API_URL,
+        json={"question": question, "session_id": None},
+        headers={"Authorization": f"Bearer {token}"},
+        stream=True,
+    )
+    response.raise_for_status()
+
+    answer_parts: list[str] = []
+    for line in response.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data: "):
+            continue
+        event = json.loads(line[len("data: ") :])
+        if event["type"] == "token":
+            answer_parts.append(event["text"])
+        elif event["type"] == "done":
+            break
+
+    return "".join(answer_parts)
+
+
 def run_validation():
     print(f"Starting RAG validation against {API_URL}...\n")
+    token = get_access_token()
 
     results = []
 
     for i, question in enumerate(QUESTIONS, 1):
         print(f"[{i}/{len(QUESTIONS)}] Question: {question}")
 
-        payload = {"question": question, "session_id": None}
-
         try:
             start_time = time.time()
-            response = requests.post(API_URL, json=payload)
-            response.raise_for_status()
+            answer = ask(question, token)
             elapsed_time = time.time() - start_time
-
-            data = response.json()
-            answer = data.get("answer", "No answer found")
 
             print(f"Answer ({elapsed_time:.2f}s): {answer}\n")
             print("-" * 80 + "\n")

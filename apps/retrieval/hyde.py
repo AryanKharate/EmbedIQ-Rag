@@ -10,6 +10,8 @@ from tenacity import (
 )
 from google.genai.errors import ServerError
 
+from config.timing import stage
+
 # Create a dedicated client instance for HyDE to keep the module standalone
 _client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
@@ -31,10 +33,12 @@ def generate_hypothetical_answer(query: str) -> str:
         f"the answer directly.\n\nQuestion: {query}"
     )
 
-    response = _client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-        config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=200),
-    )
+    # Timed inside the retry wrapper, so each attempt reports its own duration.
+    with stage("hyde", mode=settings.HYDE_MODE):
+        response = _client.models.generate_content(
+            model=settings.UTILITY_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=200),
+        )
 
     return response.text.strip()

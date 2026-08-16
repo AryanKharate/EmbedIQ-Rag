@@ -17,6 +17,8 @@ import threading
 import torch
 from django.conf import settings
 
+from config.timing import stage
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,7 +48,8 @@ class _Reranker:
                 use_fp16,
                 "cuda" if use_fp16 else "cpu",
             )
-            self._model = FlagReranker(model_name, use_fp16=use_fp16)
+            with stage("reranker_load", model=model_name):
+                self._model = FlagReranker(model_name, use_fp16=use_fp16)
             logger.info("BGE reranker ready.")
 
     def rerank(self, query: str, candidates: list, top_k: int | None = None) -> list:
@@ -75,7 +78,8 @@ class _Reranker:
         texts = [c.payload.get("text", "") for c in candidates]
         pairs = [[query, text] for text in texts]
 
-        scores = self._model.compute_score(pairs, normalize=True)
+        with stage("rerank", candidates=len(candidates)):
+            scores = self._model.compute_score(pairs, normalize=True)
 
         # compute_score returns a single float for a single pair; normalise to list
         if isinstance(scores, float):

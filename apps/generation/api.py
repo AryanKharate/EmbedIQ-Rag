@@ -16,6 +16,7 @@ import logging
 from ninja import NinjaAPI, Schema
 from django.http import StreamingHttpResponse
 
+from apps.conversations.api import router as conversations_router
 from apps.conversations.services import get_or_create_session, get_history
 from apps.generation.services import ask_stream
 from apps.retrieval.api import router as document_router
@@ -30,6 +31,7 @@ api = NinjaAPI(
 )
 
 api.add_router("/documents", document_router)
+api.add_router("/conversations", conversations_router)
 
 
 class QueryIn(Schema):

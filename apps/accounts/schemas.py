@@ -24,11 +24,6 @@ class GoogleAuthIn(Schema):
     id_token: str
 
 
-class TokenOut(Schema):
-    access: str
-    refresh: str
-
-
 class UserOut(Schema):
     id: int
     email: str

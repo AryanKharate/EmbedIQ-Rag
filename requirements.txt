@@ -1,3 +1,11 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+# Pinned: FlagEmbedding 1.4.0 calls tokenizer.prepare_for_model(), which
+# transformers>=5.0 removed from slow tokenizers (e.g. XLMRobertaTokenizer).
+# transformers' own metadata claims <6.0.0 is fine; it isn't. Stay on 4.x.
+transformers==4.46.3
+FlagEmbedding
+
 annotated-types==0.7.0
 anyio==4.14.1
 asgiref==3.11.1

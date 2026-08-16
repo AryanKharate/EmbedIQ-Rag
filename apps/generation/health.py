@@ -9,10 +9,10 @@ Health check endpoints for container orchestration and load balancers.
 
 import logging
 
-from django.conf import settings
 from django.db import connection
 from django.http import JsonResponse
-from qdrant_client import QdrantClient
+
+from apps.retrieval import vector_store
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +40,7 @@ def readiness(request):
 
     # Check Qdrant
     try:
-        client = QdrantClient(url=settings.QDRANT_URL, timeout=5)
-        client.get_collections()
+        vector_store.ping()
         checks["qdrant"] = "ok"
     except Exception as e:
         checks["qdrant"] = f"error: {e}"

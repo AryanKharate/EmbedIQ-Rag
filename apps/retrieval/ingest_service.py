@@ -10,16 +10,18 @@ import fitz  # PyMuPDF
 from django.conf import settings
 from fastembed import SparseTextEmbedding
 from google import genai
-from qdrant_client import QdrantClient
-from qdrant_client.models import (
-    Distance,
-    Modifier,
-    PointStruct,
-    SparseVector,
-    SparseVectorParams,
-    VectorParams,
-)
+from google.genai.errors import ServerError
+from qdrant_client.models import PointStruct, SparseVector
 from django.core.files.base import ContentFile
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_random_exponential,
+)
+
+from config.timing import stage
+from . import vector_store
 
 from .models import Document, DocumentImage, DocumentTable
 
@@ -27,13 +29,7 @@ logger = logging.getLogger(__name__)
 
 # Shared models for embedding
 _genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
-_qdrant_client = QdrantClient(url=settings.QDRANT_URL)
 _bm25_model = SparseTextEmbedding(model_name="Qdrant/bm25")
-
-# --- Configuration ---
-_QDRANT_UPSERT_BATCH_SIZE = 200
-_ALLOWED_EXTENSIONS = {".txt", ".pdf", ".md"}
-_MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
 
 # Regex: matches a GitHub-style Markdown table.
 # Requires: a header row, a separator row (|---|...|), and one or more data rows.
@@ -44,17 +40,17 @@ _MD_TABLE_RE = re.compile(
 
 
 def ensure_collection() -> None:
-    if not _qdrant_client.collection_exists(settings.COLLECTION_NAME):
-        _qdrant_client.create_collection(
-            collection_name=settings.COLLECTION_NAME,
-            vectors_config={
-                "dense": VectorParams(
-                    size=settings.EMBED_DIM,
-                    distance=Distance.COSINE,
-                )
-            },
-            sparse_vectors_config={"sparse": SparseVectorParams(modifier=Modifier.IDF)},
-        )
+    vector_store.ensure_collection()
+
+
+def set_document_active(doc_id, is_active: bool) -> None:
+    """Update the is_active flag on every chunk vector belonging to doc_id."""
+    vector_store.set_document_active(doc_id, is_active)
+
+
+def delete_document_vectors(doc_id) -> None:
+    """Delete every chunk vector belonging to doc_id from Qdrant."""
+    vector_store.delete_document_vectors(doc_id)
 
 
 def _chunk_text(text: str, chunk_size: int, overlap: int = 0) -> list[str]:
@@ -109,6 +105,24 @@ def _chunk_text(text: str, chunk_size: int, overlap: int = 0) -> list[str]:
     return chunks
 
 
+@retry(
+    wait=wait_random_exponential(multiplier=1, max=15),
+    stop=stop_after_attempt(3),
+    retry=retry_if_exception_type(ServerError),
+)
+def _embed_dense_one_batch(batch: list[str]):
+    """One Gemini embed_content call — retried on its own so a transient 5xx
+    doesn't force re-embedding batches that already succeeded."""
+    return _genai_client.models.embed_content(
+        model="gemini-embedding-001",
+        contents=batch,
+        config={
+            "task_type": "RETRIEVAL_DOCUMENT",
+            "output_dimensionality": settings.EMBED_DIM,
+        },
+    )
+
+
 def _embed_dense_batch(chunks: list[str]) -> list[list[float]]:
     # Gemini API supports a maximum of 100 items per batch embed request.
     batch_size = 100
@@ -116,14 +130,7 @@ def _embed_dense_batch(chunks: list[str]) -> list[list[float]]:
 
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i : i + batch_size]
-        result = _genai_client.models.embed_content(
-            model="gemini-embedding-001",
-            contents=batch,
-            config={
-                "task_type": "RETRIEVAL_DOCUMENT",
-                "output_dimensionality": settings.EMBED_DIM,
-            },
-        )
+        result = _embed_dense_one_batch(batch)
         all_embeddings.extend([embedding.values for embedding in result.embeddings])
 
     return all_embeddings
@@ -149,14 +156,15 @@ def _embed_sparse_batch(texts: list[str]) -> list[SparseVector]:
 def _validate_upload(filename: str, file_bytes: bytes) -> None:
     """Basic upload validation: extension allowlist and file size limit."""
     ext = Path(filename).suffix.lower()
-    if ext not in _ALLOWED_EXTENSIONS:
+    if ext not in settings.ALLOWED_UPLOAD_EXTENSIONS:
         raise ValueError(
-            f"Unsupported file type '{ext}'. Allowed: {', '.join(sorted(_ALLOWED_EXTENSIONS))}"
+            f"Unsupported file type '{ext}'. "
+            f"Allowed: {', '.join(sorted(settings.ALLOWED_UPLOAD_EXTENSIONS))}"
         )
-    if len(file_bytes) > _MAX_FILE_SIZE_BYTES:
+    if len(file_bytes) > settings.MAX_UPLOAD_SIZE_BYTES:
         raise ValueError(
             f"File too large ({len(file_bytes) / 1024 / 1024:.1f} MB). "
-            f"Maximum: {_MAX_FILE_SIZE_BYTES / 1024 / 1024:.0f} MB."
+            f"Maximum: {settings.MAX_UPLOAD_SIZE_BYTES / 1024 / 1024:.0f} MB."
         )
 
 
@@ -278,7 +286,7 @@ def _split_text_and_md_tables(text: str) -> list[dict]:
 
         table_text = match.group(0).strip()
 
-        # Re-parse the markdown table to produce a CSV representation
+        # Re-parse the markdown table into header + data rows
         lines = [ln for ln in table_text.splitlines() if ln.strip().startswith("|")]
         # Filter out the separator line (|---|---|)
         data_lines = [ln for ln in lines if not re.match(r"^\|[-|: \t]+\|", ln.strip())]
@@ -288,16 +296,33 @@ def _split_text_and_md_tables(text: str) -> list[dict]:
         ]
         header = parsed_rows[0] if parsed_rows else []
         data_rows = parsed_rows[1:] if len(parsed_rows) > 1 else []
-        csv_str = _rows_to_csv(header, data_rows) if header else ""
 
-        segments.append(
-            {
-                "type": "table",
-                "content": table_text,
-                "csv": csv_str,
-                "row_count": len(data_rows),
-            }
-        )
+        if header:
+            # Split into row batches the same way PDF tables are
+            # (settings.TABLE_ROW_BATCH_SIZE), so a large Markdown table in a
+            # .txt/.md upload doesn't become one unbounded parent chunk.
+            for batch_header, batch_rows in _split_rows_into_batches(
+                header, data_rows, settings.TABLE_ROW_BATCH_SIZE
+            ):
+                segments.append(
+                    {
+                        "type": "table",
+                        "content": _rows_to_markdown(batch_header, batch_rows),
+                        "csv": _rows_to_csv(batch_header, batch_rows),
+                        "row_count": len(batch_rows),
+                    }
+                )
+        else:
+            # Couldn't parse a header row — keep the raw matched text as one
+            # unsplit segment rather than dropping the table entirely.
+            segments.append(
+                {
+                    "type": "table",
+                    "content": table_text,
+                    "csv": "",
+                    "row_count": len(data_rows),
+                }
+            )
         last_end = match.end()
 
     # Any remaining plain text after the last table
@@ -430,12 +455,20 @@ def extract_text_from_bytes(db_doc: Document, file_bytes: bytes) -> list[dict]:
 def ingest_document(filename: str, file_bytes: bytes, owner=None) -> Document:
     """Parse, chunk, embed, and upsert a document into Qdrant, and save to Postgres.
 
+    Thin timing wrapper around _ingest_document so the whole ingestion reports a
+    total duration alongside its per-phase stages.
+
     Args:
         filename: Original filename of the document.
         file_bytes: Raw bytes of the document.
         owner: Django User instance that owns this document. If None, the document
                is not scoped to any user (legacy/admin ingestion path).
     """
+    with stage("ingest", filename=filename, bytes=len(file_bytes)):
+        return _ingest_document(filename, file_bytes, owner=owner)
+
+
+def _ingest_document(filename: str, file_bytes: bytes, owner=None) -> Document:
     # Validate upload before any processing
     _validate_upload(filename, file_bytes)
 
@@ -445,68 +478,77 @@ def ingest_document(filename: str, file_bytes: bytes, owner=None) -> Document:
     db_doc = Document.objects.create(filename=filename, is_active=True, owner=owner)
 
     # Extract text, tables, and images per page
-    pages_data = extract_text_from_bytes(db_doc, file_bytes)
+    with stage("ingest_extract") as s:
+        pages_data = extract_text_from_bytes(db_doc, file_bytes)
+        s["pages"] = len(pages_data)
 
     # ── 1. Collect parent chunks (text + tables) ────────────────────────────
-    parent_chunks_with_metadata: list[dict] = []
+    with stage("ingest_chunk") as s:
+        parent_chunks_with_metadata: list[dict] = []
 
-    for page_data in pages_data:
-        # Text chunks
-        p_chunks = _chunk_text(page_data["text"], settings.PARENT_CHUNK_SIZE)
-        for c in p_chunks:
-            parent_chunks_with_metadata.append(
-                {
-                    "page_number": page_data["page_number"],
-                    "text": c,
-                    "chunk_type": "text",
-                    "table_row_count": None,
-                    "table_csv": None,
-                }
+        for page_data in pages_data:
+            # Text chunks
+            p_chunks = _chunk_text(page_data["text"], settings.PARENT_CHUNK_SIZE)
+            for c in p_chunks:
+                parent_chunks_with_metadata.append(
+                    {
+                        "page_number": page_data["page_number"],
+                        "text": c,
+                        "chunk_type": "text",
+                        "table_row_count": None,
+                        "table_csv": None,
+                    }
+                )
+
+            # Table chunks — each markdown batch is already a bounded parent
+            for tbl in page_data.get("tables", []):
+                parent_chunks_with_metadata.append(
+                    {
+                        "page_number": page_data["page_number"],
+                        "text": tbl["markdown"],
+                        "chunk_type": "table",
+                        "table_row_count": tbl["row_count"],
+                        "table_csv": tbl.get("csv") or None,
+                    }
+                )
+
+        s["parents"] = len(parent_chunks_with_metadata)
+
+        if not parent_chunks_with_metadata:
+            return db_doc
+
+        # ── 2. Sub-chunk parents into small child vectors ───────────────────
+        child_chunks_flat: list[str] = []
+        child_meta: list[dict] = []
+
+        child_overlap = max(0, settings.CHILD_CHUNK_SIZE // 10)  # ~10% overlap
+
+        for parent_idx, parent_obj in enumerate(parent_chunks_with_metadata):
+            children = _chunk_text(
+                parent_obj["text"], settings.CHILD_CHUNK_SIZE, overlap=child_overlap
             )
+            for child in children:
+                child_chunks_flat.append(child)
+                child_meta.append(
+                    {
+                        "parent_text": parent_obj["text"],
+                        "parent_idx": parent_idx,
+                        "page_number": parent_obj["page_number"],
+                        "chunk_type": parent_obj["chunk_type"],
+                        "table_row_count": parent_obj["table_row_count"],
+                        "table_csv": parent_obj["table_csv"],
+                    }
+                )
 
-        # Table chunks — each markdown batch is already a bounded parent
-        for tbl in page_data.get("tables", []):
-            parent_chunks_with_metadata.append(
-                {
-                    "page_number": page_data["page_number"],
-                    "text": tbl["markdown"],
-                    "chunk_type": "table",
-                    "table_row_count": tbl["row_count"],
-                    "table_csv": tbl.get("csv") or None,
-                }
-            )
-
-    if not parent_chunks_with_metadata:
-        return db_doc
-
-    # ── 2. Sub-chunk parents into small child vectors ───────────────────────
-    child_chunks_flat: list[str] = []
-    child_meta: list[dict] = []
-
-    child_overlap = max(0, settings.CHILD_CHUNK_SIZE // 10)  # ~10% overlap
-
-    for parent_idx, parent_obj in enumerate(parent_chunks_with_metadata):
-        children = _chunk_text(
-            parent_obj["text"], settings.CHILD_CHUNK_SIZE, overlap=child_overlap
-        )
-        for child in children:
-            child_chunks_flat.append(child)
-            child_meta.append(
-                {
-                    "parent_text": parent_obj["text"],
-                    "parent_idx": parent_idx,
-                    "page_number": parent_obj["page_number"],
-                    "chunk_type": parent_obj["chunk_type"],
-                    "table_row_count": parent_obj["table_row_count"],
-                    "table_csv": parent_obj["table_csv"],
-                }
-            )
+        s["children"] = len(child_chunks_flat)
 
     # ── 3. Embed dense (children only) ─────────────────────────────────────
-    dense_vectors = _embed_dense_batch(child_chunks_flat)
+    with stage("ingest_embed_dense", children=len(child_chunks_flat)):
+        dense_vectors = _embed_dense_batch(child_chunks_flat)
 
     # ── 4. Embed sparse in batch ────────────────────────────────────────────
-    sparse_vectors = _embed_sparse_batch(child_chunks_flat)
+    with stage("ingest_embed_sparse", children=len(child_chunks_flat)):
+        sparse_vectors = _embed_sparse_batch(child_chunks_flat)
 
     # ── 5. Build and upsert Qdrant points in bounded batches ───────────────
     doc_id_str = str(db_doc.id)
@@ -546,22 +588,16 @@ def ingest_document(filename: str, file_bytes: bytes, owner=None) -> Document:
             )
         )
 
-        if len(points) >= _QDRANT_UPSERT_BATCH_SIZE:
-            _qdrant_client.upsert(
-                collection_name=settings.COLLECTION_NAME,
-                points=points,
-                wait=True,
-            )
+        if len(points) >= settings.QDRANT_UPSERT_BATCH_SIZE:
+            with stage("ingest_upsert", points=len(points)):
+                vector_store.upsert_points(points)
             logger.info("Upserted batch of %d points for %s", len(points), filename)
             points = []
 
     # Upsert remaining points
     if points:
-        _qdrant_client.upsert(
-            collection_name=settings.COLLECTION_NAME,
-            points=points,
-            wait=True,
-        )
+        with stage("ingest_upsert", points=len(points)):
+            vector_store.upsert_points(points)
         logger.info("Upserted final batch of %d points for %s", len(points), filename)
 
     return db_doc

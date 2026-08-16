@@ -8,7 +8,7 @@ services:
       - .:/app
       - hf_cache:/root/.cache/huggingface
     environment:
-      - DATABASE_URL=postgres://embediq_user:embediq_pass@db:5432/embediq_db
+      - DATABASE_URL=postgres://${POSTGRES_USER:-embediq_user}:${POSTGRES_PASSWORD:-embediq_pass}@db:5432/${POSTGRES_DB:-embediq_db}
       - QDRANT_URL=http://qdrant:6333
     env_file:
       - .env
@@ -43,6 +43,10 @@ services:
       - "80:80"
     volumes:
       - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Serves document images directly from disk — same host directory
+      # Django writes to (see web's `.:/app` mount) — so this works
+      # regardless of Django's DEBUG setting.
+      - ./media:/media:ro
     depends_on:
       - web
       - frontend
@@ -52,15 +56,22 @@ services:
   db:
     image: postgres:15-alpine
     environment:
-      - POSTGRES_USER=embediq_user
-      - POSTGRES_PASSWORD=embediq_pass
-      - POSTGRES_DB=embediq_db
-    ports:
-      - "5433:5432"
+      - POSTGRES_USER=${POSTGRES_USER:-embediq_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-embediq_pass}
+      - POSTGRES_DB=${POSTGRES_DB:-embediq_db}
+    # Not published to the host — the app only needs to reach Postgres over
+    # the internal compose network (db:5432). Uncomment to allow a local GUI
+    # client to connect directly:
+    # ports:
+    #   - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U embediq_user -d embediq_db"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-embediq_user} -d ${POSTGRES_DB:-embediq_db}",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5

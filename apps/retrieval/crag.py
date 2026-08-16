@@ -13,13 +13,13 @@ from tenacity import (
     wait_random_exponential,
 )
 
+
+from config.timing import copy_ctx, stage
+
 logger = logging.getLogger(__name__)
 
 # Shared module-level client
 _client = genai.Client(api_key=settings.GEMINI_API_KEY)
-
-# Maximum concurrent grading threads across all requests
-_MAX_GRADE_WORKERS = 4
 
 
 class RelevanceGrade(BaseModel):
@@ -43,7 +43,7 @@ def grade_chunk(query: str, chunk_text: str) -> RelevanceGrade:
     prompt = f"Query: {query}\n\nRetrieved text:\n{chunk_text}\n\nIs this text relevant to answering the query?"
 
     response = _client.models.generate_content(
-        model="gemini-2.5-flash",
+        model=settings.UTILITY_MODEL,
         contents=prompt,
         config=types.GenerateContentConfig(
             temperature=0,
@@ -58,8 +58,9 @@ def grade_all_concurrent(query: str, chunk_texts: list[str]) -> list[RelevanceGr
     """
     Grades multiple chunks in parallel using ThreadPoolExecutor.
 
-    Concurrency is capped at _MAX_GRADE_WORKERS to prevent unbounded thread
-    creation when multiple web requests invoke CRAG simultaneously.
+    Concurrency is capped at settings.CRAG_MAX_GRADE_WORKERS to prevent
+    unbounded thread creation when multiple web requests invoke CRAG
+    simultaneously.
     Failures in individual grades are logged and treated as "not relevant"
     rather than failing the entire batch.
     """
@@ -67,20 +68,25 @@ def grade_all_concurrent(query: str, chunk_texts: list[str]) -> list[RelevanceGr
         return []
 
     results: list[RelevanceGrade | None] = [None] * len(chunk_texts)
-    with ThreadPoolExecutor(max_workers=_MAX_GRADE_WORKERS) as executor:
-        future_to_idx = {
-            executor.submit(grade_chunk, query, text): idx
-            for idx, text in enumerate(chunk_texts)
-        }
-        for future in as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            try:
-                results[idx] = future.result()
-            except Exception:
-                logger.exception(
-                    "CRAG grading failed for chunk %d, treating as not relevant", idx
-                )
-                results[idx] = RelevanceGrade(relevant=False, confidence=0.0)
+    with stage("crag_grade", chunks=len(chunk_texts)):
+        with ThreadPoolExecutor(max_workers=settings.CRAG_MAX_GRADE_WORKERS) as executor:
+            # ThreadPoolExecutor does not propagate context, so each grade runs
+            # inside a copy of the caller's context — otherwise worker threads
+            # would log with a missing trace ID.
+            future_to_idx = {
+                executor.submit(copy_ctx().run, grade_chunk, query, text): idx
+                for idx, text in enumerate(chunk_texts)
+            }
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    results[idx] = future.result()
+                except Exception:
+                    logger.exception(
+                        "CRAG grading failed for chunk %d, treating as not relevant",
+                        idx,
+                    )
+                    results[idx] = RelevanceGrade(relevant=False, confidence=0.0)
 
     return results  # type: ignore[return-value]
 
@@ -99,11 +105,12 @@ def rewrite_for_search(query: str) -> str:
         "The following query didn't retrieve good results. Rewrite it to be clearer "
         f"and more specific for a document search: {query}"
     )
-    response = _client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-        config=types.GenerateContentConfig(temperature=0.3),
-    )
+    with stage("crag_rewrite"):
+        response = _client.models.generate_content(
+            model=settings.UTILITY_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.3),
+        )
     return response.text.strip()
 
 
@@ -143,42 +150,49 @@ def corrective_retrieve(query: str, search_fn) -> tuple[list, str]:
     min_relevant = settings.CRAG_MIN_RELEVANT_CHUNKS
     threshold = settings.CRAG_CONFIDENCE_THRESHOLD
 
-    # 1. Initial Retrieval
-    chunks = search_fn(query)
+    with stage("crag") as s:
+        # 1. Initial Retrieval
+        chunks = search_fn(query)
 
-    # 2. Deduplicate parents before grading to avoid wasting LLM calls
-    deduped_chunks, deduped_texts = _deduplicate_by_parent(chunks)
+        # 2. Deduplicate parents before grading to avoid wasting LLM calls
+        deduped_chunks, deduped_texts = _deduplicate_by_parent(chunks)
 
-    # 3. Grading
-    grades = grade_all_concurrent(query, deduped_texts)
+        # 3. Grading
+        grades = grade_all_concurrent(query, deduped_texts)
 
-    relevant_chunks = [
-        c
-        for c, g in zip(deduped_chunks, grades)
-        if g.relevant and g.confidence >= threshold
-    ]
+        relevant_chunks = [
+            c
+            for c, g in zip(deduped_chunks, grades)
+            if g.relevant and g.confidence >= threshold
+        ]
 
-    if len(relevant_chunks) >= min_relevant:
-        return relevant_chunks, "ok"
+        if len(relevant_chunks) >= min_relevant:
+            s["status"] = "ok"
+            s["relevant"] = len(relevant_chunks)
+            return relevant_chunks, "ok"
 
-    # 4. Correction Phase
-    rewritten_query = rewrite_for_search(query)
-    retry_chunks = search_fn(rewritten_query)
+        # 4. Correction Phase
+        rewritten_query = rewrite_for_search(query)
+        retry_chunks = search_fn(rewritten_query)
 
-    retry_deduped, retry_texts = _deduplicate_by_parent(retry_chunks)
+        retry_deduped, retry_texts = _deduplicate_by_parent(retry_chunks)
 
-    # Grade the retry chunks against the ORIGINAL query to ensure it answers the user's need
-    retry_grades = grade_all_concurrent(query, retry_texts)
+        # Grade the retry chunks against the ORIGINAL query to ensure it answers the user's need
+        retry_grades = grade_all_concurrent(query, retry_texts)
 
-    retry_relevant = [
-        c
-        for c, g in zip(retry_deduped, retry_grades)
-        if g.relevant and g.confidence >= threshold
-    ]
+        retry_relevant = [
+            c
+            for c, g in zip(retry_deduped, retry_grades)
+            if g.relevant and g.confidence >= threshold
+        ]
 
-    # Use the same threshold for both initial and retry paths
-    if len(retry_relevant) >= min_relevant:
-        return retry_relevant, "corrected"
+        # Use the same threshold for both initial and retry paths
+        if len(retry_relevant) >= min_relevant:
+            s["status"] = "corrected"
+            s["relevant"] = len(retry_relevant)
+            return retry_relevant, "corrected"
 
-    # 5. Hard Abstention
-    return [], "insufficient"
+        # 5. Hard Abstention
+        s["status"] = "insufficient"
+        s["relevant"] = 0
+        return [], "insufficient"

@@ -34,4 +34,8 @@ urlpatterns = [
 ]
 
 if settings.DEBUG:
+    # Dev-only convenience for running `python manage.py runserver` directly
+    # (e.g. via the frontend's Vite dev-server proxy). The full docker-compose
+    # stack does NOT depend on this — nginx serves /media/ straight from the
+    # shared volume (see frontend/nginx.conf) regardless of DEBUG.
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

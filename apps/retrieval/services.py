@@ -18,14 +18,22 @@ import re
 from django.conf import settings
 from fastembed import SparseTextEmbedding
 from google import genai
-from qdrant_client import QdrantClient
-from qdrant_client.models import Fusion, FusionQuery, Prefetch, SparseVector
+from google.genai.errors import ServerError
+from qdrant_client.models import FieldCondition, Filter, MatchValue, SparseVector
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_random_exponential,
+)
+
+from config.timing import stage
+from . import vector_store
 
 logger = logging.getLogger(__name__)
 
-# --- Shared clients (module-level singletons) ---
+# --- Shared client (module-level singleton) ---
 _genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
-_qdrant_client = QdrantClient(url=settings.QDRANT_URL)
 
 # BM25 model — loaded once, shared across all requests
 _bm25_model = SparseTextEmbedding(model_name="Qdrant/bm25")
@@ -39,16 +47,22 @@ _REFERENTIAL_PATTERN = re.compile(
 )
 
 
+@retry(
+    wait=wait_random_exponential(multiplier=1, max=15),
+    stop=stop_after_attempt(3),
+    retry=retry_if_exception_type(ServerError),
+)
 def embed_query(text: str) -> list[float]:
     """Embed the user query with gemini-embedding-001 (RETRIEVAL_QUERY task type)."""
-    result = _genai_client.models.embed_content(
-        model="gemini-embedding-001",
-        contents=text,
-        config={
-            "task_type": "RETRIEVAL_QUERY",
-            "output_dimensionality": settings.EMBED_DIM,
-        },
-    )
+    with stage("embed_dense"):
+        result = _genai_client.models.embed_content(
+            model="gemini-embedding-001",
+            contents=text,
+            config={
+                "task_type": "RETRIEVAL_QUERY",
+                "output_dimensionality": settings.EMBED_DIM,
+            },
+        )
     # Validate embedding output
     if not result.embeddings or len(result.embeddings) == 0:
         raise ValueError("Embedding API returned no embeddings")
@@ -66,7 +80,8 @@ def embed_sparse(text: str) -> SparseVector:
     Mirrors the same model used during ingestion so sparse scores are
     computed in the same vector space.
     """
-    result = list(_bm25_model.embed([text]))[0]
+    with stage("embed_sparse"):
+        result = list(_bm25_model.embed([text]))[0]
     return SparseVector(
         indices=result.indices.tolist(),
         values=result.values.tolist(),
@@ -118,8 +133,6 @@ def search_chunks(
     dense_vec = get_dense_query_vector(query)
     sparse_vec = embed_sparse(query)
 
-    from qdrant_client.models import Filter, FieldCondition, MatchValue
-
     must_conditions = [FieldCondition(key="is_active", match=MatchValue(value=True))]
     if user_id:
         must_conditions.append(
@@ -128,26 +141,11 @@ def search_chunks(
 
     query_filter = Filter(must=must_conditions)
 
-    hits = _qdrant_client.query_points(
-        collection_name=settings.COLLECTION_NAME,
-        prefetch=[
-            Prefetch(
-                query=sparse_vec,
-                using="sparse",
-                limit=prefetch_limit,
-                filter=query_filter,
-            ),
-            Prefetch(
-                query=dense_vec,
-                using="dense",
-                limit=prefetch_limit,
-                filter=query_filter,
-            ),
-        ],
-        query=FusionQuery(fusion=Fusion.RRF),
-        query_filter=query_filter,
-        limit=prefetch_limit,  # fetch more before dedup
-    ).points
+    with stage("qdrant_search", limit=prefetch_limit) as s:
+        hits = vector_store.hybrid_search(
+            dense_vec, sparse_vec, query_filter, prefetch_limit
+        )
+        s["hits"] = len(hits)
 
     # Deduplicate by parent_id (or parent_text fallback) to avoid redundant contexts
     seen_parents = set()
@@ -185,10 +183,14 @@ def search_and_rerank(
     """
     from .reranker import reranker
 
-    candidates = search_chunks(
-        query, top_k=settings.RERANK_CANDIDATE_LIMIT, user_id=user_id
-    )
-    reranked = reranker.rerank(query, candidates, top_k=settings.RERANK_CANDIDATE_LIMIT)
+    with stage("search_and_rerank") as s:
+        candidates = search_chunks(
+            query, top_k=settings.RERANK_CANDIDATE_LIMIT, user_id=user_id
+        )
+        reranked = reranker.rerank(
+            query, candidates, top_k=settings.RERANK_CANDIDATE_LIMIT
+        )
+        s["candidates"] = len(candidates)
 
     # We deduplicate again just in case the reranker reordered things such that
     # lower-ranked children from a higher-ranked parent get pushed down, though
@@ -221,6 +223,11 @@ def _looks_referential(question: str) -> bool:
     return bool(_REFERENTIAL_PATTERN.search(question))
 
 
+@retry(
+    wait=wait_random_exponential(multiplier=1, max=15),
+    stop=stop_after_attempt(3),
+    retry=retry_if_exception_type(ServerError),
+)
 def rewrite_query(original_question: str, history: list[dict]) -> str:
     """
     Use Gemini Flash to rewrite a follow-up question into a fully self-contained
@@ -257,10 +264,11 @@ def rewrite_query(original_question: str, history: list[dict]) -> str:
         f"Follow-up: {original_question}\n\n"
         "Standalone question:"
     )
-    response = _genai_client.models.generate_content(
-        model="gemini-2.5-flash",  # fast + cheap — only used for rewriting
-        contents=prompt,
-    )
+    with stage("rewrite_llm"):
+        response = _genai_client.models.generate_content(
+            model=settings.UTILITY_MODEL,
+            contents=prompt,
+        )
     rewritten = (response.text or "").strip()
     # Fall back to original if rewrite is empty
     if not rewritten:
