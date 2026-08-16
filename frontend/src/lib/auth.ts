@@ -13,6 +13,7 @@ export interface AuthUser {
   id: number;
   email: string;
   display_name: string;
+  is_new?: boolean; // true on first Google sign-in (so the UI can show a welcome)
 }
 
 interface JwtPayload {

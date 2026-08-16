@@ -1,4 +1,4 @@
-import { ArrowUp, FileText, Sparkles } from "lucide-react";
+import { ArrowUp, FileText, Loader2, Sparkles } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -30,16 +30,15 @@ import {
   type ChatThread,
 } from "@/lib/chat-store";
 import { useHydrated } from "@/hooks/use-hydrated";
-import { chatApi } from "@/lib/api";
+import { chatApi, conversationsApi } from "@/lib/api";
 
 interface Props {
   threadId: string;
 }
 
-// Extend ChatThread to persist the backend session_id per conversation
-interface RagThread extends ChatThread {
-  sessionId?: string;
-}
+// sessionId/needsFetch live on the base ChatThread type (chat-store.ts) —
+// this alias just documents that ChatView treats a thread as "backend-linked".
+type RagThread = ChatThread;
 
 export function ChatView({ threadId }: Props) {
   const hydrated = useHydrated();
@@ -47,6 +46,7 @@ export function ChatView({ threadId }: Props) {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -82,6 +82,50 @@ export function ChatView({ threadId }: Props) {
     saveThreads(next);
     window.dispatchEvent(new Event("rag:threads-updated"));
   }, []);
+
+  // A thread merged in from the backend (see mergeBackendSessions) starts as
+  // an empty stub — fetch its real turns on first view, then cache them
+  // locally like any other thread.
+  useEffect(() => {
+    if (!thread?.needsFetch || !thread.sessionId) return;
+    let cancelled = false;
+    setLoadingHistory(true);
+
+    conversationsApi
+      .get(thread.sessionId)
+      .then((detail) => {
+        if (cancelled) return;
+        const messages: ChatMessage[] = detail.turns.map((t) => ({
+          id: crypto.randomUUID(),
+          role: t.role,
+          content: t.content,
+          createdAt: new Date(t.created_at).getTime(),
+        }));
+        const hydratedThread: RagThread = {
+          ...thread,
+          messages,
+          needsFetch: false,
+        };
+        setThread(hydratedThread);
+        persist(hydratedThread);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Failed to load this conversation.",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingHistory(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [thread, persist]);
 
   const handleSubmit = useCallback(
     async (e?: FormEvent) => {
@@ -195,7 +239,8 @@ export function ChatView({ threadId }: Props) {
   };
 
   const messages = thread?.messages ?? [];
-  const showEmpty = messages.length === 0 && !sending && !isStreaming;
+  const showEmpty =
+    messages.length === 0 && !sending && !isStreaming && !loadingHistory;
 
   const suggestions = useMemo(
     () => [
@@ -219,7 +264,12 @@ export function ChatView({ threadId }: Props) {
     <div className="flex h-full flex-col">
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl px-4 py-8">
-          {showEmpty ? (
+          {loadingHistory && messages.length === 0 ? (
+            <div className="flex items-center justify-center gap-2 pt-16 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading conversation…
+            </div>
+          ) : showEmpty ? (
             <EmptyState
               onPick={(s) => {
                 setInput(s);
@@ -488,7 +538,7 @@ function MessageBubble({
                 .map((url, i) => (
                   <EnlargeableImage
                     key={i}
-                    src={`http://localhost:8000${url}`}
+                    src={url}
                     alt="Source content"
                     className="max-w-[200px] rounded-md border border-border/50 shadow-sm object-cover"
                   />

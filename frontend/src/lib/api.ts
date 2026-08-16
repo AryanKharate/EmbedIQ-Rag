@@ -7,7 +7,12 @@
  * redirecting to /login.
  */
 
-import { getAccessToken, refreshAccessToken, logout } from "@/lib/auth";
+import {
+  getAccessToken,
+  refreshAccessToken,
+  logout,
+  type AuthUser,
+} from "@/lib/auth";
 
 const BASE = "/api";
 
@@ -98,13 +103,6 @@ export interface StreamCallbacks {
   onError?: (err: Error) => void;
 }
 
-export interface AuthUser {
-  id: number;
-  email: string;
-  display_name: string;
-  is_new?: boolean;
-}
-
 export interface AuthResponse {
   access: string;
   refresh: string;
@@ -183,6 +181,32 @@ export const documentsApi = {
 
   delete: (id: string): Promise<void> =>
     request(`/documents/${id}`, { method: "DELETE" }),
+};
+
+/* ───────── Conversations (backend-persisted history) ───────── */
+
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  updated_at: string;
+  message_count: number;
+}
+
+export interface ConversationTurn {
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
+
+export interface ConversationDetail {
+  id: string;
+  turns: ConversationTurn[];
+}
+
+export const conversationsApi = {
+  list: (): Promise<ConversationSummary[]> => request("/conversations/"),
+  get: (id: string): Promise<ConversationDetail> =>
+    request(`/conversations/${id}`),
 };
 
 /* ───────── Chat / Query ───────── */

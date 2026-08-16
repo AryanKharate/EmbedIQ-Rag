@@ -28,7 +28,9 @@ import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import {
   createThread,
+  dismissSession,
   loadThreads,
+  mergeBackendSessions,
   saveThreads,
   type ChatThread,
 } from "@/lib/chat-store";
@@ -39,6 +41,7 @@ import {
   useToggleDocument,
   useDeleteDocument,
 } from "@/lib/use-documents";
+import { useConversations } from "@/lib/use-conversations";
 
 export function AppSidebar() {
   const hydrated = useHydrated();
@@ -51,7 +54,7 @@ export function AppSidebar() {
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ── Chat threads (still localStorage) ──
+  // ── Chat threads (localStorage, the fast primary cache) ──
   useEffect(() => {
     if (!hydrated) return;
     setThreads(loadThreads());
@@ -59,6 +62,17 @@ export function AppSidebar() {
     window.addEventListener("rag:threads-updated", onUpdate);
     return () => window.removeEventListener("rag:threads-updated", onUpdate);
   }, [hydrated]);
+
+  // ── Merge backend-persisted sessions the local cache doesn't know about ──
+  // Keeps localStorage as the primary source for the sidebar (no loading
+  // spinner for the common case), while making sure a conversation that only
+  // exists in the backend — read on another device, or after clearing local
+  // storage — still shows up. See chat-store.ts's mergeBackendSessions().
+  const { data: backendConversations } = useConversations();
+  useEffect(() => {
+    if (!hydrated || !backendConversations) return;
+    setThreads(mergeBackendSessions(backendConversations));
+  }, [hydrated, backendConversations]);
 
   // ── Documents (real API) ──
   const { data: docs = [], isLoading: docsLoading } = useDocuments();
@@ -77,7 +91,11 @@ export function AppSidebar() {
 
   const handleDeleteThread = useCallback(
     (id: string) => {
-      const next = loadThreads().filter((t) => t.id !== id);
+      const all = loadThreads();
+      const target = all.find((t) => t.id === id);
+      // Prevent mergeBackendSessions() from re-adding this as a stub later.
+      if (target?.sessionId) dismissSession(target.sessionId);
+      const next = all.filter((t) => t.id !== id);
       saveThreads(next);
       setThreads(next);
       window.dispatchEvent(new Event("rag:threads-updated"));
