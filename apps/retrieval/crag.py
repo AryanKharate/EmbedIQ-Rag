@@ -2,9 +2,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.conf import settings
-from google import genai
-from google.genai import types
 from google.genai.errors import ServerError
+from langsmith import traceable
 from pydantic import BaseModel
 from tenacity import (
     retry,
@@ -14,12 +13,10 @@ from tenacity import (
 )
 
 
+from config.genai_client import utility_generate
 from config.timing import copy_ctx, stage
 
 logger = logging.getLogger(__name__)
-
-# Shared module-level client
-_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 
 class RelevanceGrade(BaseModel):
@@ -28,8 +25,10 @@ class RelevanceGrade(BaseModel):
 
 
 @retry(
-    wait=wait_random_exponential(multiplier=1, max=15),
-    stop=stop_after_attempt(3),
+    wait=wait_random_exponential(
+        multiplier=0.5, max=settings.GEMINI_UTILITY_RETRY_MAX_WAIT
+    ),
+    stop=stop_after_attempt(settings.GEMINI_UTILITY_MAX_ATTEMPTS),
     retry=retry_if_exception_type(ServerError),
 )
 def grade_chunk(query: str, chunk_text: str) -> RelevanceGrade:
@@ -42,18 +41,17 @@ def grade_chunk(query: str, chunk_text: str) -> RelevanceGrade:
     """
     prompt = f"Query: {query}\n\nRetrieved text:\n{chunk_text}\n\nIs this text relevant to answering the query?"
 
-    response = _client.models.generate_content(
-        model=settings.UTILITY_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            temperature=0,
-            response_mime_type="application/json",
-            response_schema=RelevanceGrade,
-        ),
+    response = utility_generate(
+        prompt,
+        temperature=0,
+        response_mime_type="application/json",
+        response_schema=RelevanceGrade,
     )
+
     return RelevanceGrade.model_validate_json(response.text)
 
 
+@traceable(run_type="chain")
 def grade_all_concurrent(query: str, chunk_texts: list[str]) -> list[RelevanceGrade]:
     """
     Grades multiple chunks in parallel using ThreadPoolExecutor.
@@ -92,8 +90,10 @@ def grade_all_concurrent(query: str, chunk_texts: list[str]) -> list[RelevanceGr
 
 
 @retry(
-    wait=wait_random_exponential(multiplier=1, max=15),
-    stop=stop_after_attempt(3),
+    wait=wait_random_exponential(
+        multiplier=0.5, max=settings.GEMINI_UTILITY_RETRY_MAX_WAIT
+    ),
+    stop=stop_after_attempt(settings.GEMINI_UTILITY_MAX_ATTEMPTS),
     retry=retry_if_exception_type(ServerError),
 )
 def rewrite_for_search(query: str) -> str:
@@ -106,12 +106,9 @@ def rewrite_for_search(query: str) -> str:
         f"and more specific for a document search: {query}"
     )
     with stage("crag_rewrite"):
-        response = _client.models.generate_content(
-            model=settings.UTILITY_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.3),
-        )
-    return response.text.strip()
+        response = utility_generate(prompt, temperature=0.3)
+
+    return (response.text or "").strip()
 
 
 def _deduplicate_by_parent(chunks: list) -> tuple[list, list[str]]:
@@ -135,6 +132,7 @@ def _deduplicate_by_parent(chunks: list) -> tuple[list, list[str]]:
     return deduped_chunks, deduped_texts
 
 
+@traceable(run_type="chain")
 def corrective_retrieve(query: str, search_fn) -> tuple[list, str]:
     """
     CRAG Orchestrator:

@@ -49,3 +49,6 @@ websockets==16.0
 fastembed
 pymupdf>=1.23.0
 djangorestframework-simplejwt>=5.3.0
+
+
+>=0.1.140

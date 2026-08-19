@@ -157,6 +157,25 @@ GEN_MODEL = os.environ.get("GEN_MODEL", "gemini-3.5-flash-lite")
 UTILITY_MODEL = os.environ.get("UTILITY_MODEL", "gemini-3.5-flash-lite")
 MAX_HISTORY_TURNS = int(os.environ.get("MAX_HISTORY_TURNS", 10))
 
+# --- Gemini request timeouts (milliseconds) ---
+# Without these a hung call has no ceiling: tenacity retries it up to 3 times
+# with exponential backoff, so one slow response becomes a ~30s request.
+# Utility calls (rewrite / HyDE / CRAG grading) sit in front of retrieval and
+# every caller of them fails open, so they get the tightest budget.
+GEMINI_UTILITY_TIMEOUT_MS = int(os.environ.get("GEMINI_UTILITY_TIMEOUT_MS", 2500))
+GEMINI_EMBED_TIMEOUT_MS = int(os.environ.get("GEMINI_EMBED_TIMEOUT_MS", 3000))
+GEMINI_GENERATE_TIMEOUT_MS = int(os.environ.get("GEMINI_GENERATE_TIMEOUT_MS", 15000))
+
+# Retry budget. Utility calls are best-effort — one quick retry, then fail open
+# to the un-rewritten query, rather than making the user wait out a backoff.
+# The user-facing generation call keeps a fuller budget.
+GEMINI_UTILITY_MAX_ATTEMPTS = int(os.environ.get("GEMINI_UTILITY_MAX_ATTEMPTS", 2))
+GEMINI_UTILITY_RETRY_MAX_WAIT = float(os.environ.get("GEMINI_UTILITY_RETRY_MAX_WAIT", 2))
+GEMINI_GENERATE_MAX_ATTEMPTS = int(os.environ.get("GEMINI_GENERATE_MAX_ATTEMPTS", 3))
+GEMINI_GENERATE_RETRY_MAX_WAIT = float(
+    os.environ.get("GEMINI_GENERATE_RETRY_MAX_WAIT", 5)
+)
+
 # --- Chunking config ---
 # Character-based sizes. Approx token equivalents (English):
 #   PARENT: 2500 chars ≈ 500–800 tokens (LLM context window)
@@ -173,6 +192,13 @@ RERANK_CANDIDATE_LIMIT = int(os.environ.get("RERANK_CANDIDATE_LIMIT", 25))
 # --- HyDE config ---
 USE_HYDE = os.environ.get("USE_HYDE", "false").lower() == "true"
 HYDE_MODE = os.environ.get("HYDE_MODE", "replace")
+HYDE_MAX_OUTPUT_TOKENS = int(os.environ.get("HYDE_MAX_OUTPUT_TOKENS", 200))
+
+# Thinking budget for the pre-retrieval utility calls (rewrite / HyDE / CRAG
+# grading). These are mechanical text transforms, so thinking tokens are pure
+# added latency in front of retrieval. 0 disables thinking; -1 leaves the
+# model's own default in place.
+UTILITY_THINKING_BUDGET = int(os.environ.get("UTILITY_THINKING_BUDGET", 0))
 
 _VALID_HYDE_MODES = {"replace", "ensemble"}
 if HYDE_MODE not in _VALID_HYDE_MODES:
@@ -186,6 +212,12 @@ if HYDE_MODE not in _VALID_HYDE_MODES:
 CRAG_ENABLED = os.environ.get("CRAG_ENABLED", "false").lower() == "true"
 CRAG_CONFIDENCE_THRESHOLD = float(os.environ.get("CRAG_CONFIDENCE_THRESHOLD", "0.6"))
 CRAG_MIN_RELEVANT_CHUNKS = int(os.environ.get("CRAG_MIN_RELEVANT_CHUNKS", "2"))
+
+# --- LangSmith tracing (token/latency monitoring) ---
+# Read directly by the langsmith SDK (not through Django settings):
+# LANGSMITH_TRACING, LANGSMITH_API_KEY, LANGSMITH_PROJECT. See .env.
+# @traceable/trace() calls throughout apps/retrieval and apps/generation
+# no-op automatically when LANGSMITH_TRACING is unset/false.
 
 # --- Table ingestion config ---
 # Max data rows per table chunk. The header row is repeated in every batch.

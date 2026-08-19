@@ -67,6 +67,12 @@ QDRANT_URL=http://qdrant:6333
 
 # Add your AI Provider API Keys here (e.g., OpenAI, Cohere, etc.)
 OPENAI_API_KEY=your_openai_api_key_here
+
+# LangSmith tracing (token usage / latency monitoring, cloud — not self-hosted)
+# Get a key from https://smith.langchain.com/ (Settings → API Keys)
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=your_langsmith_api_key_here
+LANGSMITH_PROJECT=embediq
 ```
 
 ### 3. Spin up the cluster

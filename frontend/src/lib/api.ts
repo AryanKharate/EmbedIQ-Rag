@@ -264,39 +264,87 @@ export const chatApi = {
     const decoder = new TextDecoder();
     let buffer = "";
 
-    // Each character is queued individually so the delay creates true
-    // character-by-character rendering (like ChatGPT/Claude), regardless of
-    // how large each chunk Gemini sends is.
-    const CHAR_DELAY_MS = 5; // tune this: lower = faster, higher = slower
-    const charQueue: string[] = [];
-    let draining = false;
+    // Smooth out however Gemini happens to chunk its output, WITHOUT adding a
+    // fixed cost per character.
+    //
+    // The previous implementation queued every character behind its own
+    // `setTimeout(..., 5)`, so displaying an answer took `length x 5ms` no
+    // matter how fast the server delivered it — a 1200-character answer spent
+    // 6s painting text that had already arrived, several times longer than the
+    // actual Gemini stream. It also fired one React state update per character
+    // (~200/sec), which the render loop could not keep up with on a long
+    // thread, so the backlog grew as the answer got longer.
+    //
+    // Instead, drain on `requestAnimationFrame` and emit a *proportional*
+    // slice each frame: whatever is pending is spread over at most
+    // DRAIN_FRAMES frames (~100ms at 60fps). Text still appears progressively
+    // rather than in one lump, but the buffer can never lag the network by
+    // more than ~100ms, and rendering costs exactly one state update per
+    // frame regardless of answer length.
+    const DRAIN_FRAMES = 6;
+    let pending = "";
+    let rafId: number | null = null;
 
-    const drainQueue = () => {
-      if (draining || charQueue.length === 0) return;
-      draining = true;
-      const next = () => {
-        if (charQueue.length === 0) {
-          draining = false;
-          return;
-        }
+    const canAnimate =
+      typeof requestAnimationFrame === "function" &&
+      typeof document !== "undefined";
 
-        // If the user switches tabs, browsers aggressively throttle setTimeout.
-        // To prevent the stream from freezing, flush the queue instantly.
-        if (
-          typeof document !== "undefined" &&
-          document.visibilityState === "hidden"
-        ) {
-          callbacks.onToken(charQueue.join(""));
-          charQueue.length = 0;
-          draining = false;
-          return;
-        }
-
-        callbacks.onToken(charQueue.shift()!);
-        setTimeout(next, CHAR_DELAY_MS);
-      };
-      setTimeout(next, CHAR_DELAY_MS);
+    const flushAll = () => {
+      if (!pending) return;
+      const text = pending;
+      pending = "";
+      callbacks.onToken(text);
     };
+
+    const drainFrame = () => {
+      rafId = null;
+      if (!pending) return;
+
+      // A hidden tab does not fire rAF at all, which would stall the stream
+      // until the user came back. Nothing is being painted anyway, so just
+      // hand over everything at once.
+      if (document.visibilityState === "hidden") {
+        flushAll();
+        return;
+      }
+
+      const take = Math.max(1, Math.ceil(pending.length / DRAIN_FRAMES));
+      const text = pending.slice(0, take);
+      pending = pending.slice(take);
+      callbacks.onToken(text);
+
+      if (pending) rafId = requestAnimationFrame(drainFrame);
+    };
+
+    const enqueue = (text: string) => {
+      if (!text) return;
+      if (!canAnimate) {
+        // SSR / non-browser consumer — no frames to align to.
+        callbacks.onToken(text);
+        return;
+      }
+      pending += text;
+      if (rafId === null) rafId = requestAnimationFrame(drainFrame);
+    };
+
+    // Resolves once everything received has been handed to onToken. Bounded by
+    // DRAIN_FRAMES frames rather than by the length of the answer.
+    const waitForDrain = () =>
+      new Promise<void>((resolve) => {
+        const check = () => {
+          if (!pending) {
+            resolve();
+            return;
+          }
+          if (!canAnimate || document.visibilityState === "hidden") {
+            flushAll();
+            resolve();
+            return;
+          }
+          requestAnimationFrame(check);
+        };
+        check();
+      });
 
     try {
       while (true) {
@@ -319,24 +367,10 @@ export const chatApi = {
             if (payload.type === "sources") {
               callbacks.onSources(payload.sources ?? []);
             } else if (payload.type === "token") {
-              // Explode the chunk into individual characters
-              for (const char of payload.text as string) {
-                charQueue.push(char);
-              }
-              drainQueue();
+              enqueue(payload.text as string);
             } else if (payload.type === "done") {
-              // Wait for all queued characters to drain before firing onDone
-              const waitForDrain = () =>
-                new Promise<void>((resolve) => {
-                  const check = () => {
-                    if (charQueue.length === 0 && !draining) {
-                      resolve();
-                    } else {
-                      setTimeout(check, CHAR_DELAY_MS * 2);
-                    }
-                  };
-                  check();
-                });
+              // Everything received must reach onToken before onDone, or the
+              // final state would drop the tail of the answer.
               await waitForDrain();
               callbacks.onDone(payload.session_id);
             }
@@ -346,6 +380,13 @@ export const chatApi = {
         }
       }
     } catch (err) {
+      // Drop anything still queued and cancel the pending frame, so a token
+      // callback can't fire after onError has already reset the thread.
+      pending = "";
+      if (rafId !== null && canAnimate) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
       callbacks.onError?.(err instanceof Error ? err : new Error(String(err)));
     }
   },

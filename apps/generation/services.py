@@ -13,9 +13,9 @@ from collections import defaultdict
 
 from django.conf import settings
 from django.db.models import Q
-from google import genai
 from google.genai import types
 from google.genai.errors import ServerError
+from langsmith import trace, traceable
 from tenacity import (
     Retrying,
     retry,
@@ -24,13 +24,11 @@ from tenacity import (
     wait_random_exponential,
 )
 
-from apps.retrieval.services import rewrite_query, search_chunks, search_and_rerank
+from apps.retrieval.services import prepare_query, search_chunks, search_and_rerank
+from config.genai_client import GENERATE_HTTP_OPTIONS, client as _genai_client
 from config.timing import stage, timed
 
 logger = logging.getLogger(__name__)
-
-# --- Shared client (module-level singleton) ---
-_genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 
 def build_contents(
@@ -124,9 +122,21 @@ SYSTEM_INSTRUCTION = (
 )
 
 
+def _generation_config(instruction: str) -> types.GenerateContentConfig:
+    """Config for the user-facing answer call. http_options bounds the request
+    so a hung call can't sit on the critical path indefinitely — this one gets
+    the loosest budget of the three, since it *is* the payload."""
+    return types.GenerateContentConfig(
+        system_instruction=instruction,
+        http_options=GENERATE_HTTP_OPTIONS,
+    )
+
+
 @retry(
-    wait=wait_random_exponential(multiplier=1, max=15),
-    stop=stop_after_attempt(3),
+    wait=wait_random_exponential(
+        multiplier=1, max=settings.GEMINI_GENERATE_RETRY_MAX_WAIT
+    ),
+    stop=stop_after_attempt(settings.GEMINI_GENERATE_MAX_ATTEMPTS),
     retry=retry_if_exception_type(ServerError),
 )
 def _generate_answer(gen_model: str, contents: list[dict], instruction: str):
@@ -135,7 +145,7 @@ def _generate_answer(gen_model: str, contents: list[dict], instruction: str):
     return _genai_client.models.generate_content(
         model=gen_model,
         contents=contents,
-        config=types.GenerateContentConfig(system_instruction=instruction),
+        config=_generation_config(instruction),
     )
 
 
@@ -152,8 +162,10 @@ def _start_stream_with_retry(gen_model: str, contents: list[dict], instruction: 
     first_chunk before continuing to iterate `stream`.
     """
     retryer = Retrying(
-        wait=wait_random_exponential(multiplier=1, max=15),
-        stop=stop_after_attempt(3),
+        wait=wait_random_exponential(
+            multiplier=1, max=settings.GEMINI_GENERATE_RETRY_MAX_WAIT
+        ),
+        stop=stop_after_attempt(settings.GEMINI_GENERATE_MAX_ATTEMPTS),
         retry=retry_if_exception_type(ServerError),
         reraise=True,
     )
@@ -162,7 +174,7 @@ def _start_stream_with_retry(gen_model: str, contents: list[dict], instruction: 
         stream = _genai_client.models.generate_content_stream(
             model=gen_model,
             contents=contents,
-            config=types.GenerateContentConfig(system_instruction=instruction),
+            config=_generation_config(instruction),
         )
         first_chunk = next(stream, None)
         return stream, first_chunk
@@ -170,6 +182,55 @@ def _start_stream_with_retry(gen_model: str, contents: list[dict], instruction: 
     return retryer(_open)
 
 
+def _plan_and_retrieve(
+    query: str, history: list[dict], user_id: str | None
+) -> tuple[list, str]:
+    """
+    Everything between the user's question and a ranked list of chunks.
+
+    Shared by ask() and ask_stream(), which had drifted into two copies of the
+    same block. prepare_query() collapses the query rewrite and the HyDE
+    passage into a single Gemini call, and hands the passage straight to
+    search so it isn't generated twice.
+    """
+    with stage("prepare_query"):
+        prepared = prepare_query(query, history)
+
+    with stage("retrieve") as s:
+        if settings.CRAG_ENABLED:
+            from apps.retrieval.crag import corrective_retrieve
+
+            search_fn = search_and_rerank if settings.RERANKER_ENABLED else search_chunks
+
+            # The pre-generated HyDE passage belongs to the *initial* query
+            # only. CRAG's correction path searches a different, rewritten
+            # query, so it must generate its own (search_chunks does that when
+            # hypothetical is None).
+            def _scoped_search(q, **kwargs):
+                kwargs.setdefault(
+                    "hypothetical",
+                    prepared.hypothetical if q == prepared.search_query else None,
+                )
+                return search_fn(q, user_id=user_id, **kwargs)
+
+            chunks, crag_status = corrective_retrieve(
+                prepared.search_query, _scoped_search
+            )
+        else:
+            search_fn = search_and_rerank if settings.RERANKER_ENABLED else search_chunks
+            chunks = search_fn(
+                prepared.search_query,
+                user_id=user_id,
+                hypothetical=prepared.hypothetical,
+            )
+            crag_status = "ok"
+        s["chunks"] = len(chunks)
+        s["crag_status"] = crag_status
+
+    return chunks, crag_status
+
+
+@traceable(run_type="chain")
 @timed("ask")
 def ask(
     query: str,
@@ -189,33 +250,14 @@ def ask(
     history = history or []
     gen_model = model or settings.GEN_MODEL
 
-    # Step 1: context-aware retrieval — rewrite before embedding
-    with stage("rewrite"):
-        search_query = rewrite_query(query, history)
-
-    # Step 2: retrieve relevant chunks, with optional cross-encoder reranking and CRAG
-    with stage("retrieve") as s:
-        if settings.CRAG_ENABLED:
-            from apps.retrieval.crag import corrective_retrieve
-
-            search_fn = search_and_rerank if settings.RERANKER_ENABLED else search_chunks
-
-            # Wrap search_fn to pass user_id
-            def _scoped_search(q, **kwargs):
-                return search_fn(q, user_id=user_id, **kwargs)
-
-            chunks, crag_status = corrective_retrieve(search_query, _scoped_search)
-        else:
-            if settings.RERANKER_ENABLED:
-                chunks = search_and_rerank(search_query, user_id=user_id)
-            else:
-                chunks = search_chunks(search_query, user_id=user_id)
-            crag_status = "ok"
-        s["chunks"] = len(chunks)
-        s["crag_status"] = crag_status
+    # Steps 1–2: plan the query (rewrite + HyDE in one call) and retrieve
+    chunks, crag_status = _plan_and_retrieve(query, history, user_id)
 
     if crag_status == "insufficient":
-        return "I don't have enough relevant information in the knowledge base to answer that confidently."
+        return (
+            "I don't have enough relevant information in the knowledge base to answer that confidently.",
+            [],
+        )
 
     if not chunks:
         return "No relevant chunks found in the collection.", []
@@ -291,99 +333,96 @@ def ask_stream(
     history = history or []
     gen_model = model or settings.GEN_MODEL
 
-    # Step 1: context-aware query rewrite
-    with stage("rewrite"):
-        search_query = rewrite_query(query, history)
+    # ask() is traced via @traceable, but this is a generator (yields SSE
+    # chunks as they arrive), so it can't use the decorator the same way —
+    # trace() as a context manager lets tracing span the yields directly.
+    with trace(
+        "ask_stream",
+        run_type="chain",
+        inputs={"query": query, "user_id": user_id, "model": gen_model},
+    ) as rt:
+        # Steps 1–2: plan the query (rewrite + HyDE in one call) and retrieve
+        chunks, crag_status = _plan_and_retrieve(query, history, user_id)
 
-    # Step 2: retrieve relevant chunks
-    with stage("retrieve") as s:
-        if settings.CRAG_ENABLED:
-            from apps.retrieval.crag import corrective_retrieve
+        rt.metadata["crag_status"] = crag_status
 
-            search_fn = search_and_rerank if settings.RERANKER_ENABLED else search_chunks
+        if crag_status == "insufficient":
+            msg = "I don't have enough relevant information in the knowledge base to answer that confidently."
+            yield f"data: {json.dumps({'type': 'sources', 'sources': []})}\n\n"
+            yield f"data: {json.dumps({'type': 'token', 'text': msg})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'session_id': str(session.id)})}\n\n"
+            save_turn(session, "user", query)
+            save_turn(session, "assistant", msg)
+            rt.end(outputs={"answer": msg, "sources": []})
+            return
 
-            def _scoped_search(q, **kwargs):
-                return search_fn(q, user_id=user_id, **kwargs)
+        if not chunks:
+            msg = "No relevant chunks found in the collection."
+            yield f"data: {json.dumps({'type': 'sources', 'sources': []})}\n\n"
+            yield f"data: {json.dumps({'type': 'token', 'text': msg})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'session_id': str(session.id)})}\n\n"
+            save_turn(session, "user", query)
+            save_turn(session, "assistant", msg)
+            rt.end(outputs={"answer": msg, "sources": []})
+            return
 
-            chunks, crag_status = corrective_retrieve(search_query, _scoped_search)
-        else:
-            if settings.RERANKER_ENABLED:
-                chunks = search_and_rerank(search_query, user_id=user_id)
-            else:
-                chunks = search_chunks(search_query, user_id=user_id)
-            crag_status = "ok"
-        s["chunks"] = len(chunks)
-        s["crag_status"] = crag_status
+        # Step 3: build multi-turn contents list
+        contents, sources = build_contents(query, chunks, history)
 
-    if crag_status == "insufficient":
-        msg = "I don't have enough relevant information in the knowledge base to answer that confidently."
-        yield f"data: {json.dumps({'type': 'sources', 'sources': []})}\n\n"
-        yield f"data: {json.dumps({'type': 'token', 'text': msg})}\n\n"
-        yield f"data: {json.dumps({'type': 'done', 'session_id': str(session.id)})}\n\n"
-        save_turn(session, "user", query)
-        save_turn(session, "assistant", msg)
-        return
+        # Emit sources immediately so the frontend can show cards before text starts
+        yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
 
-    if not chunks:
-        msg = "No relevant chunks found in the collection."
-        yield f"data: {json.dumps({'type': 'sources', 'sources': []})}\n\n"
-        yield f"data: {json.dumps({'type': 'token', 'text': msg})}\n\n"
-        yield f"data: {json.dumps({'type': 'done', 'session_id': str(session.id)})}\n\n"
-        save_turn(session, "user", query)
-        save_turn(session, "assistant", msg)
-        return
-
-    # Step 3: build multi-turn contents list
-    contents, sources = build_contents(query, chunks, history)
-
-    # Emit sources immediately so the frontend can show cards before text starts
-    yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
-
-    # Step 4: stream from Gemini
-    instruction = SYSTEM_INSTRUCTION
-    if crag_status == "corrected":
-        instruction += (
-            "\nNote: initial retrieval was weak; a corrected search was used."
-        )
-
-    full_answer_parts: list[str] = []
-
-    with stage("generate", model=gen_model) as s:
-        started = time.perf_counter()
-        try:
-            stream, first_chunk = _start_stream_with_retry(
-                gen_model, contents, instruction
+        # Step 4: stream from Gemini
+        instruction = SYSTEM_INSTRUCTION
+        if crag_status == "corrected":
+            instruction += (
+                "\nNote: initial retrieval was weak; a corrected search was used."
             )
 
-            def _iter_chunks():
-                if first_chunk is not None:
-                    yield first_chunk
-                yield from stream
+        full_answer_parts: list[str] = []
 
-            for chunk in _iter_chunks():
-                if chunk.text:
-                    # Time-to-first-token — the latency the user actually feels,
-                    # as opposed to the full generation time.
-                    if "ttft_ms" not in s:
-                        s["ttft_ms"] = round((time.perf_counter() - started) * 1000, 1)
-                    full_answer_parts.append(chunk.text)
-                    yield f"data: {json.dumps({'type': 'token', 'text': chunk.text})}\n\n"
-        except Exception as exc:
-            logger.error("Streaming generation error: %s", exc)
-            error_msg = "Streaming was interrupted. Please try again."
-            yield f"data: {json.dumps({'type': 'token', 'text': error_msg})}\n\n"
-            full_answer_parts.append(error_msg)
-            s["error"] = type(exc).__name__
+        # _start_stream_with_retry() calls the wrap_gemini()-wrapped
+        # generate_content_stream(), which traces this whole call as one
+        # "llm" run (with token usage) once the generator below is fully
+        # consumed — no manual tracing needed here.
+        with stage("generate", model=gen_model) as s:
+            started = time.perf_counter()
+            try:
+                stream, first_chunk = _start_stream_with_retry(
+                    gen_model, contents, instruction
+                )
 
-    full_answer = "".join(full_answer_parts)
-    if not full_answer:
-        full_answer = (
-            "I was unable to generate a response. Please try rephrasing your question."
-        )
+                def _iter_chunks():
+                    if first_chunk is not None:
+                        yield first_chunk
+                    yield from stream
 
-    # Persist both turns to DB
-    save_turn(session, "user", query)
-    save_turn(session, "assistant", full_answer)
+                for chunk in _iter_chunks():
+                    if chunk.text:
+                        # Time-to-first-token — the latency the user actually feels,
+                        # as opposed to the full generation time.
+                        if "ttft_ms" not in s:
+                            s["ttft_ms"] = round((time.perf_counter() - started) * 1000, 1)
+                        full_answer_parts.append(chunk.text)
+                        yield f"data: {json.dumps({'type': 'token', 'text': chunk.text})}\n\n"
+            except Exception as exc:
+                logger.error("Streaming generation error: %s", exc)
+                error_msg = "Streaming was interrupted. Please try again."
+                yield f"data: {json.dumps({'type': 'token', 'text': error_msg})}\n\n"
+                full_answer_parts.append(error_msg)
+                s["error"] = type(exc).__name__
 
-    # Final done event carries the session_id the frontend needs for follow-ups
-    yield f"data: {json.dumps({'type': 'done', 'session_id': str(session.id)})}\n\n"
+        full_answer = "".join(full_answer_parts)
+        if not full_answer:
+            full_answer = (
+                "I was unable to generate a response. Please try rephrasing your question."
+            )
+
+        # Persist both turns to DB
+        save_turn(session, "user", query)
+        save_turn(session, "assistant", full_answer)
+
+        rt.end(outputs={"answer": full_answer, "sources": sources})
+
+        # Final done event carries the session_id the frontend needs for follow-ups
+        yield f"data: {json.dumps({'type': 'done', 'session_id': str(session.id)})}\n\n"
