@@ -162,8 +162,11 @@ MAX_HISTORY_TURNS = int(os.environ.get("MAX_HISTORY_TURNS", 10))
 # with exponential backoff, so one slow response becomes a ~30s request.
 # Utility calls (rewrite / HyDE / CRAG grading) sit in front of retrieval and
 # every caller of them fails open, so they get the tightest budget.
-GEMINI_UTILITY_TIMEOUT_MS = int(os.environ.get("GEMINI_UTILITY_TIMEOUT_MS", 2500))
-GEMINI_EMBED_TIMEOUT_MS = int(os.environ.get("GEMINI_EMBED_TIMEOUT_MS", 3000))
+# The Gemini API rejects any http_options.timeout below 10000ms outright
+# ("Manually set deadline Ns is too short. Minimum allowed deadline is 10s."),
+# so these floors are a hard API requirement, not just a latency preference.
+GEMINI_UTILITY_TIMEOUT_MS = int(os.environ.get("GEMINI_UTILITY_TIMEOUT_MS", 10000))
+GEMINI_EMBED_TIMEOUT_MS = int(os.environ.get("GEMINI_EMBED_TIMEOUT_MS", 10000))
 GEMINI_GENERATE_TIMEOUT_MS = int(os.environ.get("GEMINI_GENERATE_TIMEOUT_MS", 15000))
 
 # Retry budget. Utility calls are best-effort — one quick retry, then fail open

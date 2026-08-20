@@ -100,15 +100,24 @@ def rewrite_for_search(query: str) -> str:
     """
     Rewrites a query that failed to retrieve good results, making it
     broader or more explicit for document search.
+
+    Fails open to the original query: a failed rewrite here shouldn't crash
+    the whole request when the retry search can just run on the un-rewritten
+    query instead (same fail-open contract as rewrite_query() and
+    generate_hypothetical_answer()).
     """
     prompt = (
         "The following query didn't retrieve good results. Rewrite it to be clearer "
         f"and more specific for a document search: {query}"
     )
-    with stage("crag_rewrite"):
-        response = utility_generate(prompt, temperature=0.3)
+    try:
+        with stage("crag_rewrite"):
+            response = utility_generate(prompt, temperature=0.3)
+    except Exception as exc:
+        logger.warning("CRAG rewrite failed (%s), using original query", exc)
+        return query
 
-    return (response.text or "").strip()
+    return (response.text or "").strip() or query
 
 
 def _deduplicate_by_parent(chunks: list) -> tuple[list, list[str]]:

@@ -25,11 +25,40 @@ export interface ChatThread {
 }
 
 const THREADS_KEY = "rag.threads.v1";
+const RETRIEVAL_SETTINGS_KEY = "rag.retrieval_settings.v1";
 // Backend session ids the user explicitly deleted locally. There's no
 // DELETE /api/conversations/{id} endpoint (this is a read-only history
 // view), so without tracking dismissals, deleting a backend-linked thread
 // would just have mergeBackendSessions() re-add it as a stub on next load.
 const DISMISSED_SESSIONS_KEY = "rag.dismissed_sessions.v1";
+
+/** User-facing HyDE/CRAG toggle state, persisted across sessions/threads —
+ *  overrides the server's USE_HYDE/CRAG_ENABLED defaults for each query. */
+export interface RetrievalSettings {
+  useHyde: boolean | null;
+  useCrag: boolean | null;
+}
+
+const DEFAULT_RETRIEVAL_SETTINGS: RetrievalSettings = {
+  useHyde: null,
+  useCrag: null,
+};
+
+export function loadRetrievalSettings(): RetrievalSettings {
+  if (typeof window === "undefined") return DEFAULT_RETRIEVAL_SETTINGS;
+  try {
+    const raw = window.localStorage.getItem(RETRIEVAL_SETTINGS_KEY);
+    if (!raw) return DEFAULT_RETRIEVAL_SETTINGS;
+    return { ...DEFAULT_RETRIEVAL_SETTINGS, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_RETRIEVAL_SETTINGS;
+  }
+}
+
+export function saveRetrievalSettings(settings: RetrievalSettings) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(RETRIEVAL_SETTINGS_KEY, JSON.stringify(settings));
+}
 
 function loadDismissedSessionIds(): Set<string> {
   if (typeof window === "undefined") return new Set();

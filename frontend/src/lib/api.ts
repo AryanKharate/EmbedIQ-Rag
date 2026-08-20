@@ -103,6 +103,13 @@ export interface StreamCallbacks {
   onError?: (err: Error) => void;
 }
 
+export interface QueryOptions {
+  /** Per-request override of the server's HyDE default. Omit to use it. */
+  useHyde?: boolean;
+  /** Per-request override of the server's CRAG default. Omit to use it. */
+  useCrag?: boolean;
+}
+
 export interface AuthResponse {
   access: string;
   refresh: string;
@@ -224,6 +231,7 @@ export const chatApi = {
     question: string,
     session_id: string | null | undefined,
     callbacks: StreamCallbacks,
+    options?: QueryOptions,
   ): Promise<void> => {
     const token = getAccessToken();
 
@@ -232,10 +240,17 @@ export const chatApi = {
       ...(t ? { Authorization: `Bearer ${t}` } : {}),
     });
 
+    const body = JSON.stringify({
+      question,
+      session_id: session_id ?? null,
+      use_hyde: options?.useHyde ?? null,
+      use_crag: options?.useCrag ?? null,
+    });
+
     let res = await fetch(`${BASE}/query`, {
       method: "POST",
       headers: makeHeaders(token),
-      body: JSON.stringify({ question, session_id: session_id ?? null }),
+      body,
     });
 
     // Silent token refresh on 401
@@ -245,7 +260,7 @@ export const chatApi = {
         res = await fetch(`${BASE}/query`, {
           method: "POST",
           headers: makeHeaders(newToken),
-          body: JSON.stringify({ question, session_id: session_id ?? null }),
+          body,
         });
       } else {
         logout();

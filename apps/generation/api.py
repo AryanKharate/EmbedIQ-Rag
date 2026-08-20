@@ -37,6 +37,8 @@ api.add_router("/conversations", conversations_router)
 class QueryIn(Schema):
     question: str
     session_id: str | None = None  # omit to start a new conversation
+    use_hyde: bool | None = None  # omit to use the server default (USE_HYDE)
+    use_crag: bool | None = None  # omit to use the server default (CRAG_ENABLED)
 
 
 @api.post(
@@ -94,6 +96,8 @@ def query_endpoint(request, payload: QueryIn):
             session=session,
             history=history,
             user_id=str(user.id),
+            use_hyde=payload.use_hyde,
+            use_crag=payload.use_crag,
         )
 
     response = StreamingHttpResponse(

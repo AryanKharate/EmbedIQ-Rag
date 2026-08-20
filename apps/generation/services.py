@@ -183,7 +183,11 @@ def _start_stream_with_retry(gen_model: str, contents: list[dict], instruction: 
 
 
 def _plan_and_retrieve(
-    query: str, history: list[dict], user_id: str | None
+    query: str,
+    history: list[dict],
+    user_id: str | None,
+    use_hyde: bool | None = None,
+    use_crag: bool | None = None,
 ) -> tuple[list, str]:
     """
     Everything between the user's question and a ranked list of chunks.
@@ -192,12 +196,17 @@ def _plan_and_retrieve(
     same block. prepare_query() collapses the query rewrite and the HyDE
     passage into a single Gemini call, and hands the passage straight to
     search so it isn't generated twice.
+
+    use_hyde / use_crag: per-request overrides of settings.USE_HYDE /
+    settings.CRAG_ENABLED. None falls back to the server default.
     """
+    effective_crag = settings.CRAG_ENABLED if use_crag is None else use_crag
+
     with stage("prepare_query"):
-        prepared = prepare_query(query, history)
+        prepared = prepare_query(query, history, use_hyde=use_hyde)
 
     with stage("retrieve") as s:
-        if settings.CRAG_ENABLED:
+        if effective_crag:
             from apps.retrieval.crag import corrective_retrieve
 
             search_fn = search_and_rerank if settings.RERANKER_ENABLED else search_chunks
@@ -211,6 +220,7 @@ def _plan_and_retrieve(
                     "hypothetical",
                     prepared.hypothetical if q == prepared.search_query else None,
                 )
+                kwargs.setdefault("use_hyde", use_hyde)
                 return search_fn(q, user_id=user_id, **kwargs)
 
             chunks, crag_status = corrective_retrieve(
@@ -222,6 +232,7 @@ def _plan_and_retrieve(
                 prepared.search_query,
                 user_id=user_id,
                 hypothetical=prepared.hypothetical,
+                use_hyde=use_hyde,
             )
             crag_status = "ok"
         s["chunks"] = len(chunks)
@@ -237,6 +248,8 @@ def ask(
     history: list[dict] | None = None,
     model: str | None = None,
     user_id: str | None = None,
+    use_hyde: bool | None = None,
+    use_crag: bool | None = None,
 ) -> tuple[str, list[dict]]:
     """
     Full conversational RAG pipeline:
@@ -245,13 +258,19 @@ def ask(
       3. Build a multi-turn contents list (history + new context + question)
       4. Generate the answer with Gemini using a system instruction
 
+    use_hyde / use_crag: per-request overrides of the HyDE/CRAG server
+    defaults. None uses the server default (settings.USE_HYDE /
+    settings.CRAG_ENABLED).
+
     Returns the answer text. Handles blocked or empty model responses gracefully.
     """
     history = history or []
     gen_model = model or settings.GEN_MODEL
 
     # Steps 1–2: plan the query (rewrite + HyDE in one call) and retrieve
-    chunks, crag_status = _plan_and_retrieve(query, history, user_id)
+    chunks, crag_status = _plan_and_retrieve(
+        query, history, user_id, use_hyde=use_hyde, use_crag=use_crag
+    )
 
     if crag_status == "insufficient":
         return (
@@ -318,6 +337,8 @@ def ask_stream(
     history: list[dict] | None = None,
     model: str | None = None,
     user_id: str | None = None,
+    use_hyde: bool | None = None,
+    use_crag: bool | None = None,
 ):
     """
     Streaming version of the full conversational RAG pipeline.
@@ -325,6 +346,10 @@ def ask_stream(
       1. data: {"type": "sources", "sources": [...]}\n\n   (before any text)
       2. data: {"type": "token",   "text": "..."}\n\n    (one per Gemini chunk)
       3. data: {"type": "done",    "session_id": "..."}\n\n  (final event)
+
+    use_hyde / use_crag: per-request overrides of the HyDE/CRAG server
+    defaults. None uses the server default (settings.USE_HYDE /
+    settings.CRAG_ENABLED).
 
     After the stream ends it saves both turns to Postgres (same as ask()).
     """
@@ -342,7 +367,9 @@ def ask_stream(
         inputs={"query": query, "user_id": user_id, "model": gen_model},
     ) as rt:
         # Steps 1–2: plan the query (rewrite + HyDE in one call) and retrieve
-        chunks, crag_status = _plan_and_retrieve(query, history, user_id)
+        chunks, crag_status = _plan_and_retrieve(
+            query, history, user_id, use_hyde=use_hyde, use_crag=use_crag
+        )
 
         rt.metadata["crag_status"] = crag_status
 

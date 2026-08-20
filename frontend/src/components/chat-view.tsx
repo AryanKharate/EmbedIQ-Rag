@@ -14,6 +14,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -25,6 +26,8 @@ import { cn } from "@/lib/utils";
 import {
   deriveTitle,
   loadThreads,
+  loadRetrievalSettings,
+  saveRetrievalSettings,
   saveThreads,
   type ChatMessage,
   type ChatThread,
@@ -48,6 +51,8 @@ export function ChatView({ threadId }: Props) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hydeEnabled, setHydeEnabled] = useState(false);
+  const [cragEnabled, setCragEnabled] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Ref to hold the mutable streaming thread without triggering extra re-renders
@@ -60,6 +65,30 @@ export function ChatView({ threadId }: Props) {
     const found = all.find((t) => t.id === threadId) ?? null;
     setThread(found);
   }, [hydrated, threadId]);
+
+  // Load persisted HyDE/CRAG toggle state (a global preference, not per-thread)
+  useEffect(() => {
+    if (!hydrated) return;
+    const settings = loadRetrievalSettings();
+    setHydeEnabled(settings.useHyde ?? false);
+    setCragEnabled(settings.useCrag ?? false);
+  }, [hydrated]);
+
+  const toggleHyde = useCallback(
+    (checked: boolean) => {
+      setHydeEnabled(checked);
+      saveRetrievalSettings({ useHyde: checked, useCrag: cragEnabled });
+    },
+    [cragEnabled],
+  );
+
+  const toggleCrag = useCallback(
+    (checked: boolean) => {
+      setCragEnabled(checked);
+      saveRetrievalSettings({ useHyde: hydeEnabled, useCrag: checked });
+    },
+    [hydeEnabled],
+  );
 
   // Focus textarea on thread change
   useEffect(() => {
@@ -164,58 +193,63 @@ export function ChatView({ threadId }: Props) {
       };
 
       try {
-        await chatApi.queryStream(text, thread.sessionId ?? null, {
-          onSources: (sources) => {
-            // Sources arrive before any text — insert the assistant bubble immediately
-            const withAssistant: RagThread = {
-              ...withUser,
-              messages: [
-                ...withUser.messages,
-                { ...assistantPlaceholder, sources },
-              ],
-            };
-            streamingThreadRef.current = withAssistant;
-            setThread(withAssistant);
-            setSending(false); // hide TypingBubble
-            setIsStreaming(true);
-          },
+        await chatApi.queryStream(
+          text,
+          thread.sessionId ?? null,
+          {
+            onSources: (sources) => {
+              // Sources arrive before any text — insert the assistant bubble immediately
+              const withAssistant: RagThread = {
+                ...withUser,
+                messages: [
+                  ...withUser.messages,
+                  { ...assistantPlaceholder, sources },
+                ],
+              };
+              streamingThreadRef.current = withAssistant;
+              setThread(withAssistant);
+              setSending(false); // hide TypingBubble
+              setIsStreaming(true);
+            },
 
-          onToken: (tokenText) => {
-            const base = streamingThreadRef.current ?? withUser;
-            const updated: RagThread = {
-              ...base,
-              messages: base.messages.map((m) =>
-                m.id === assistantMsgId
-                  ? { ...m, content: m.content + tokenText }
-                  : m,
-              ),
-            };
-            streamingThreadRef.current = updated;
-            setThread(updated);
-          },
+            onToken: (tokenText) => {
+              const base = streamingThreadRef.current ?? withUser;
+              const updated: RagThread = {
+                ...base,
+                messages: base.messages.map((m) =>
+                  m.id === assistantMsgId
+                    ? { ...m, content: m.content + tokenText }
+                    : m,
+                ),
+              };
+              streamingThreadRef.current = updated;
+              setThread(updated);
+            },
 
-          onDone: (session_id) => {
-            const final = streamingThreadRef.current ?? withUser;
-            const finalThread: RagThread = {
-              ...final,
-              sessionId: session_id,
-              updatedAt: Date.now(),
-            };
-            streamingThreadRef.current = null;
-            setIsStreaming(false);
-            setThread(finalThread);
-            persist(finalThread);
-          },
+            onDone: (session_id) => {
+              const final = streamingThreadRef.current ?? withUser;
+              const finalThread: RagThread = {
+                ...final,
+                sessionId: session_id,
+                updatedAt: Date.now(),
+              };
+              streamingThreadRef.current = null;
+              setIsStreaming(false);
+              setThread(finalThread);
+              persist(finalThread);
+            },
 
-          onError: (err) => {
-            const msg = err.message ?? "Something went wrong.";
-            setError(msg);
-            setSending(false);
-            setIsStreaming(false);
-            streamingThreadRef.current = null;
-            setThread(thread);
+            onError: (err) => {
+              const msg = err.message ?? "Something went wrong.";
+              setError(msg);
+              setSending(false);
+              setIsStreaming(false);
+              streamingThreadRef.current = null;
+              setThread(thread);
+            },
           },
-        });
+          { useHyde: hydeEnabled, useCrag: cragEnabled },
+        );
       } catch (err) {
         const msg =
           err instanceof Error ? err.message : "Something went wrong.";
@@ -228,7 +262,7 @@ export function ChatView({ threadId }: Props) {
         requestAnimationFrame(() => textareaRef.current?.focus());
       }
     },
-    [input, thread, sending, persist],
+    [input, thread, sending, persist, hydeEnabled, cragEnabled],
   );
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -307,6 +341,24 @@ export function ChatView({ threadId }: Props) {
           onSubmit={handleSubmit}
           className="mx-auto w-full max-w-3xl px-4 py-4"
         >
+          <div className="mb-2 flex flex-wrap items-center gap-4 px-1">
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Switch
+                checked={hydeEnabled}
+                onCheckedChange={toggleHyde}
+                aria-label="Toggle HyDE"
+              />
+              HyDE
+            </label>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Switch
+                checked={cragEnabled}
+                onCheckedChange={toggleCrag}
+                aria-label="Toggle CRAG"
+              />
+              CRAG
+            </label>
+          </div>
           <div className="relative flex items-end rounded-2xl border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring/40">
             <Textarea
               ref={textareaRef}
@@ -346,13 +398,23 @@ function MessageBubble({
 }) {
   const isUser = message.role === "user";
   return (
-    <li className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}>
+    <li
+      className={cn(
+        "flex gap-3 embediq-msg-in",
+        isUser ? "justify-end" : "justify-start",
+      )}
+    >
       {!isUser && (
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
           <Sparkles className="h-4 w-4" />
         </div>
       )}
-      <div className="flex flex-col gap-2 max-w-[85%]">
+      {/* items-start: without it, this column defaults to align-items:stretch,
+          so the (possibly still-empty) text bubble gets stretched to match
+          the width of the sources block once sources arrive — the bubble
+          then appears "full line" width instantly, before any text has
+          streamed in, instead of growing with the content. */}
+      <div className="flex flex-col items-start gap-2 max-w-[85%]">
         <div
           className={cn(
             "rounded-2xl px-4 py-3 text-[15px] leading-6",
@@ -478,7 +540,9 @@ function MessageBubble({
               >
                 {message.content}
               </ReactMarkdown>
-              {/* Blinking cursor while this bubble is actively streaming */}
+              {/* Blinking cursor while this bubble is actively streaming.
+                  Keyframes live in src/styles.css (embediq-blink) so they're
+                  defined once, not re-injected via <style> per message. */}
               {isStreaming && (
                 <span
                   aria-hidden
@@ -493,12 +557,6 @@ function MessageBubble({
                   }}
                 />
               )}
-              <style>{`
-              @keyframes embediq-blink {
-                0%, 100% { opacity: 1; }
-                50%       { opacity: 0; }
-              }
-            `}</style>
             </>
           )}
         </div>
@@ -553,7 +611,7 @@ function MessageBubble({
 
 function TypingBubble() {
   return (
-    <li className="flex gap-3">
+    <li className="flex gap-3 embediq-msg-in">
       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
         <Sparkles className="h-4 w-4" />
       </div>

@@ -107,7 +107,9 @@ def embed_sparse(text: str) -> SparseVector:
 
 
 @traceable(run_type="chain")
-def get_dense_query_vector(query: str, hypothetical: str | None = None) -> list[float]:
+def get_dense_query_vector(
+    query: str, hypothetical: str | None = None, use_hyde: bool | None = None
+) -> list[float]:
     """
     Returns the dense embedding for the query, applying HyDE if enabled.
 
@@ -116,8 +118,11 @@ def get_dense_query_vector(query: str, hypothetical: str | None = None) -> list[
         avoids a second utility round-trip. When None (HyDE-only path, or the
         CRAG correction path re-searching a rewritten query) one is generated
         here, as before.
+    use_hyde: per-request override of settings.USE_HYDE. None falls back to
+        the server default.
     """
-    if not settings.USE_HYDE:
+    effective_hyde = settings.USE_HYDE if use_hyde is None else use_hyde
+    if not effective_hyde:
         return embed_query(query)
 
     if hypothetical is None:
@@ -164,6 +169,7 @@ def search_chunks(
     top_k: int | None = None,
     user_id: str | None = None,
     hypothetical: str | None = None,
+    use_hyde: bool | None = None,
 ) -> list:
     """
     Hybrid search: dense (semantic) + sparse (BM25 keyword) with RRF fusion.
@@ -181,11 +187,15 @@ def search_chunks(
 
     user_id: when provided, restricts results to vectors uploaded by that user.
     hypothetical: optional pre-generated HyDE passage (see prepare_query()).
+    use_hyde: per-request override of settings.USE_HYDE. None falls back to
+        the server default.
     """
     k = top_k if top_k is not None else settings.TOP_K
     prefetch_limit = k * 4
 
-    dense_vec = get_dense_query_vector(query, hypothetical=hypothetical)
+    dense_vec = get_dense_query_vector(
+        query, hypothetical=hypothetical, use_hyde=use_hyde
+    )
     sparse_vec = embed_sparse(query)
 
     must_conditions = [FieldCondition(key="is_active", match=MatchValue(value=True))]
@@ -222,6 +232,7 @@ def search_and_rerank(
     top_k: int | None = None,
     user_id: str | None = None,
     hypothetical: str | None = None,
+    use_hyde: bool | None = None,
 ) -> list:
     """
     Full retrieval pipeline with cross-encoder reranking.
@@ -248,6 +259,7 @@ def search_and_rerank(
             top_k=settings.RERANK_CANDIDATE_LIMIT,
             user_id=user_id,
             hypothetical=hypothetical,
+            use_hyde=use_hyde,
         )
         reranked = reranker.rerank(
             query, candidates, top_k=settings.RERANK_CANDIDATE_LIMIT
@@ -412,7 +424,9 @@ def _call_plan_llm(original_question: str, history: list[dict]) -> _QueryPlan:
 
 
 @traceable(run_type="chain")
-def prepare_query(original_question: str, history: list[dict]) -> PreparedQuery:
+def prepare_query(
+    original_question: str, history: list[dict], use_hyde: bool | None = None
+) -> PreparedQuery:
     """
     Do all the pre-retrieval LLM work in as few round-trips as possible.
 
@@ -423,9 +437,12 @@ def prepare_query(original_question: str, history: list[dict]) -> PreparedQuery:
 
     Falls back to the individual calls when only one is needed, and to the raw
     question when the merged call fails.
+
+    use_hyde: per-request override of settings.USE_HYDE. None falls back to
+        the server default.
     """
     needs_rewrite = bool(history) and _looks_referential(original_question)
-    needs_hyde = settings.USE_HYDE
+    needs_hyde = settings.USE_HYDE if use_hyde is None else use_hyde
 
     if needs_rewrite and needs_hyde:
         try:
